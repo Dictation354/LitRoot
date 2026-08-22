@@ -1,0 +1,49 @@
+appId: io.paperrelay.desktop
+productName: PaperRelay
+asar: true
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  - '!docs/**'
+  - '!local-research/**'
+  - '!src/**'
+  - '!tests/**'
+  - '!scripts/**'
+
+extraResources:
+  - from: resources/paperrelay-app-icon.png
+    to: paperrelay-app-icon.png
+  - from: dist/relay/paperrelay-relay.cjs
+    to: relay/paperrelay-relay.cjs
+
+asarUnpack:
+  - node_modules/node-pty/**
+
+mac:
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+
+win:
+  icon: resources/paperrelay-app-icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: '${productName}-${version}-${os}-${arch}-unsigned-setup.${ext}'
+
+dmg:
+  sign: false
+
+publish: null
