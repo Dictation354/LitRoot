@@ -14,7 +14,7 @@ blob-report/
 .DS_Store
 *.log
 *.tsbuildinfo
-.paperrelay/
+.litroot/
 
 # Local research corpora (may contain publisher-provided full text and assets)
 local-research/

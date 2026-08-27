@@ -1,80 +1,46 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type {
-  AppCloseRequest,
-  AgentTerminalExit,
-  AgentTerminalOutput,
-  PaperRelayBridge
-} from '../shared/contracts.js'
+import type { LitRootBridge, ServiceEvent } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
+import { paperAssetUrl } from './asset-url.js'
 
-const bridge: PaperRelayBridge = {
-  library: {
-    summary: () => ipcRenderer.invoke(IPC.librarySummary)
+const bridge: LitRootBridge = {
+  system: {
+    listDistributions: () => ipcRenderer.invoke(IPC.systemListDistributions),
+    diagnose: (distribution) => ipcRenderer.invoke(IPC.systemDiagnose, distribution),
+    pickProjectPath: (distribution) => ipcRenderer.invoke(IPC.systemPickProjectPath, distribution),
+    openExternal: (url) => ipcRenderer.invoke(IPC.systemOpenExternal, url),
+    copyText: (text) => ipcRenderer.invoke(IPC.systemCopyText, text)
   },
-  roots: {
-    list: () => ipcRenderer.invoke(IPC.rootsList),
-    addWithPicker: () => ipcRenderer.invoke(IPC.rootsAddWithPicker),
-    rescan: (rootId) => ipcRenderer.invoke(IPC.rootsRescan, rootId),
-    remove: (rootId) => ipcRenderer.invoke(IPC.rootsRemove, rootId)
+  projects: {
+    list: () => ipcRenderer.invoke(IPC.projectsList),
+    add: (distribution, path, name) => ipcRenderer.invoke(IPC.projectsAdd, distribution, path, name),
+    remove: (projectId) => ipcRenderer.invoke(IPC.projectsRemove, projectId),
+    scan: (projectId) => ipcRenderer.invoke(IPC.projectsScan, projectId)
   },
   papers: {
     search: (request) => ipcRenderer.invoke(IPC.papersSearch, request),
-    get: (paperId, rootId) => ipcRenderer.invoke(IPC.papersGet, paperId, rootId),
-    issues: (rootId) => ipcRenderer.invoke(IPC.papersIssues, rootId),
-    updateUserState: (paperId, patch) =>
-      ipcRenderer.invoke(IPC.papersUpdateUserState, paperId, patch),
-    saveDraft: (paperId, draft) => ipcRenderer.invoke(IPC.papersSaveDraft, paperId, draft),
-    discardDraft: (paperId) => ipcRenderer.invoke(IPC.papersDiscardDraft, paperId),
-    commitDraft: (paperId) => ipcRenderer.invoke(IPC.papersCommitDraft, paperId),
-    markOpened: (paperId) => ipcRenderer.invoke(IPC.papersMarkOpened, paperId)
+    get: (projectId, paperId) => ipcRenderer.invoke(IPC.papersGet, projectId, paperId),
+    updateMetadata: (request) => ipcRenderer.invoke(IPC.papersUpdateMetadata, request),
+    assetUrl: paperAssetUrl
   },
-  insights: {
-    paper: (paperId, rootId) => ipcRenderer.invoke(IPC.insightsPaper, paperId, rootId),
-    landscape: (request) => ipcRenderer.invoke(IPC.insightsLandscape, request)
+  notes: {
+    read: (request) => ipcRenderer.invoke(IPC.notesRead, request),
+    write: (request) => ipcRenderer.invoke(IPC.notesWrite, request)
   },
-  agentRelay: {
-    setup: () => ipcRenderer.invoke(IPC.agentRelaySetup),
-    copyCodexConfig: () => ipcRenderer.invoke(IPC.agentRelayCopyCodexConfig),
-    copyTestPrompt: () => ipcRenderer.invoke(IPC.agentRelayCopyTestPrompt),
-    copyPaperReference: (paperId, rootId) =>
-      ipcRenderer.invoke(IPC.agentRelayCopyPaperReference, paperId, rootId),
-    copyRootContext: (rootId) => ipcRenderer.invoke(IPC.agentRelayCopyRootContext, rootId)
+  fetch: {
+    create: (request) => ipcRenderer.invoke(IPC.fetchCreate, request),
+    get: (projectId, runId) => ipcRenderer.invoke(IPC.fetchGet, projectId, runId),
+    list: (projectId) => ipcRenderer.invoke(IPC.fetchList, projectId),
+    cancel: (projectId, runId) => ipcRenderer.invoke(IPC.fetchCancel, projectId, runId),
+    resume: (projectId, runId) => ipcRenderer.invoke(IPC.fetchResume, projectId, runId)
   },
-  agentTerminal: {
-    start: (request) => ipcRenderer.invoke(IPC.agentTerminalStart, request),
-    write: (sessionId, data) => ipcRenderer.invoke(IPC.agentTerminalWrite, sessionId, data),
-    resize: (sessionId, cols, rows) =>
-      ipcRenderer.invoke(IPC.agentTerminalResize, sessionId, cols, rows),
-    stop: (sessionId) => ipcRenderer.invoke(IPC.agentTerminalStop, sessionId),
-    onOutput: (listener) => {
-      const receiveOutput = (_event: IpcRendererEvent, payload: AgentTerminalOutput): void => {
-        listener(payload)
-      }
-      ipcRenderer.on(IPC.agentTerminalOutput, receiveOutput)
-      return () => ipcRenderer.removeListener(IPC.agentTerminalOutput, receiveOutput)
-    },
-    onExit: (listener) => {
-      const receiveExit = (_event: IpcRendererEvent, payload: AgentTerminalExit): void => {
-        listener(payload)
-      }
-      ipcRenderer.on(IPC.agentTerminalExit, receiveExit)
-      return () => ipcRenderer.removeListener(IPC.agentTerminalExit, receiveExit)
+  events: {
+    subscribe: (listener) => {
+      const receive = (_event: IpcRendererEvent, value: ServiceEvent): void => listener(value)
+      ipcRenderer.on(IPC.eventsPush, receive)
+      return () => ipcRenderer.removeListener(IPC.eventsPush, receive)
     }
-  },
-  lifecycle: {
-    respondToClose: (requestId, proceed) =>
-      ipcRenderer.invoke(IPC.lifecycleRespondToClose, requestId, proceed),
-    onCloseRequested: (listener) => {
-      const receiveRequest = (_event: IpcRendererEvent, request: AppCloseRequest): void => {
-        listener(request)
-      }
-      ipcRenderer.on(IPC.lifecycleCloseRequested, receiveRequest)
-      return () => ipcRenderer.removeListener(IPC.lifecycleCloseRequested, receiveRequest)
-    }
-  },
-  system: {
-    revealLocation: (locationId) => ipcRenderer.invoke(IPC.systemRevealLocation, locationId)
   }
 }
 
-contextBridge.exposeInMainWorld('paperrelay', bridge)
+contextBridge.exposeInMainWorld('litroot', bridge)

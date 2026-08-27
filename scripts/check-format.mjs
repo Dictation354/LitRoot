@@ -9,15 +9,15 @@ const rootFiles = [
   '.node-version',
   '.npmrc',
   'README.md',
+  'README.en.md',
   'electron-builder.yml',
   'electron.vite.config.ts',
   'package.json',
   'pnpm-workspace.yaml',
   'tsconfig.json',
-  'tsconfig.mcp.json',
   'tsconfig.node.json',
   'tsconfig.web.json',
-  'vite.relay.config.ts',
+  'vite.service.config.ts',
   'vitest.config.ts'
 ]
 const textExtensions = new Set(['.css', '.html', '.js', '.json', '.md', '.mjs', '.ts', '.tsx', '.yaml', '.yml'])

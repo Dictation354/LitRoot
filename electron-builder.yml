@@ -1,5 +1,5 @@
-appId: io.paperrelay.desktop
-productName: PaperRelay
+appId: io.litroot.desktop
+productName: LitRoot
 asar: true
 
 directories:
@@ -11,39 +11,26 @@ files:
   - package.json
   - '!**/*.map'
   - '!docs/**'
-  - '!local-research/**'
   - '!src/**'
   - '!tests/**'
   - '!scripts/**'
 
 extraResources:
-  - from: resources/paperrelay-app-icon.png
-    to: paperrelay-app-icon.png
-  - from: dist/relay/paperrelay-relay.cjs
-    to: relay/paperrelay-relay.cjs
-
-asarUnpack:
-  - node_modules/node-pty/**
-
-mac:
-  category: public.app-category.productivity
-  hardenedRuntime: true
-  gatekeeperAssess: false
-  target:
-    - target: dmg
-      arch: [arm64, x64]
-    - target: zip
-      arch: [arm64, x64]
-  artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+  - from: resources/litroot-app-icon.png
+    to: litroot-app-icon.png
+  - from: dist/service/litroot-service.cjs
+    to: service/litroot-service.cjs
 
 win:
-  icon: resources/paperrelay-app-icon.png
+  icon: resources/litroot-app-icon.png
   target:
     - target: nsis
       arch: [x64]
-  artifactName: '${productName}-${version}-${os}-${arch}-unsigned-setup.${ext}'
+  artifactName: '${productName}-${version}-windows-${arch}-unsigned-setup.${ext}'
 
-dmg:
-  sign: false
+nsis:
+  oneClick: true
+  perMachine: false
+  packElevateHelper: false
 
 publish: null

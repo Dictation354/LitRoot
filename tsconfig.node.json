@@ -7,6 +7,8 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": ["node"],
@@ -15,9 +17,10 @@
   },
   "include": [
     "electron.vite.config.ts",
-    "vite.relay.config.ts",
+    "vite.service.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
+    "src/service/**/*.ts",
     "src/shared/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts"

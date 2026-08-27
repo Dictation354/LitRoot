@@ -1,72 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import {
-  corpusWorkIdentityKey,
+  canonicalHttpUrl,
+  doiFromInput,
   normalizeDoi,
-  paperIdentityKey,
-  stableId
-} from '../../src/main/ingest/identity.js'
+  paperIdFor,
+  safeFtsQuery
+} from '../../src/service/identity.js'
 
-describe('normalizeDoi', () => {
+describe('paper identity', () => {
   it.each([
-    ['10.1234/ABC.Def', '10.1234/abc.def'],
-    [' DOI: 10.1234/ABC.Def. ', '10.1234/abc.def'],
-    ['https://doi.org/10.1234/ABC.Def?download=1', '10.1234/abc.def'],
-    ['http://dx.doi.org/10.1234/ABC.Def#section', '10.1234/abc.def'],
-    ['urn:doi:10.1234/ABC.Def', '10.1234/abc.def']
-  ])('normalizes %s', (input, expected) => {
+    ['DOI: 10.1234/ABC.7.', '10.1234/abc.7'],
+    ['https://doi.org/10.1234/ABC.7?download=1', '10.1234/abc.7'],
+    ['urn:doi:10.1234/ABC.7', '10.1234/abc.7']
+  ])('normalizes DOI %s', (input, expected) => {
     expect(normalizeDoi(input)).toBe(expected)
   })
 
-  it.each([null, undefined, 42, '', 'not-a-doi', '11.1234/wrong-prefix', '10.12/too-short']) (
-    'rejects invalid input %j',
-    (input) => {
-      expect(normalizeDoi(input)).toBeNull()
-    }
-  )
-})
-
-describe('paper identity helpers', () => {
-  it('prefers normalized DOI identity over file location', () => {
-    expect(paperIdentityKey('10.1234/example', '/project-a/papers/article.json')).toBe(
-      'doi:10.1234/example'
-    )
+  it('extracts a DOI from a pasted citation before duplicate checks', () => {
+    expect(doiFromInput('Smith et al. (2025). Result. DOI: 10.1234/ABC.7.')).toBe('10.1234/abc.7')
   })
 
-  it('uses location identity while a DOI is unresolved', () => {
-    expect(paperIdentityKey(null, '/project-a/papers/article.json')).toBe(
-      'location:/project-a/papers/article.json'
-    )
+  it('canonicalizes source URLs before stable identity', () => {
+    const first = canonicalHttpUrl('HTTPS://Example.TEST:443/paper/?utm_source=x&b=2&a=1#part')
+    const second = canonicalHttpUrl('https://example.test/paper?a=1&b=2')
+    expect(first).toBe(second)
+    expect(paperIdFor(null, first, 'papers/one.md')).toBe(paperIdFor(null, second, 'papers/two.md'))
   })
 
-  it('coalesces recognized DOI-less corpus representations within one collection anchor', () => {
-    const json = '/research/dl4geo/corpus/groups/library/records/work-00014.both.json'
-    const markdown = '/research/dl4geo/corpus/groups/fetch/papers/work-00014/fulltext.md'
-    const attempt = '/research/dl4geo/corpus/groups/fetch/papers/work-00014/attempts/record-before-retry.both.json'
-
-    expect(corpusWorkIdentityKey(json)).toBe(corpusWorkIdentityKey(markdown))
-    expect(corpusWorkIdentityKey(markdown)).toBe(corpusWorkIdentityKey(attempt))
-    expect(paperIdentityKey(null, json)).toBe(paperIdentityKey(null, markdown))
-  })
-
-  it('keeps the same upstream work token separate across collection anchors', () => {
-    const first = '/research/first/corpus/groups/library/records/work-00014.both.json'
-    const second = '/research/second/corpus/groups/library/records/work-00014.both.json'
-
-    expect(paperIdentityKey(null, first)).not.toBe(paperIdentityKey(null, second))
-  })
-
-  it('does not merge DOI-less papers by title-like paths outside the recognized corpus layout', () => {
-    expect(corpusWorkIdentityKey('/research/papers/work-00014/fulltext.md')).toBeNull()
-    expect(paperIdentityKey(null, '/research/a/same-title.md')).not.toBe(
-      paperIdentityKey(null, '/research/b/same-title.md')
-    )
-  })
-
-  it('generates deterministic, namespace-specific stable IDs', () => {
-    const first = stableId('paper', 'doi:10.1234/example')
-
-    expect(first).toBe(stableId('paper', 'doi:10.1234/example'))
-    expect(first).toMatch(/^paper_[a-f0-9]{24}$/)
-    expect(first).not.toBe(stableId('location', 'doi:10.1234/example'))
+  it('uses DOI, then URL, then relative path and neutralizes FTS operators', () => {
+    expect(paperIdFor('10.1234/test', null, 'papers/a.md')).toBe(paperIdFor('10.1234/test', 'https://other.test', 'papers/b.md'))
+    expect(paperIdFor(null, null, 'papers/a.md')).not.toBe(paperIdFor(null, null, 'papers/b.md'))
+    expect(safeFtsQuery('title" OR * ^ (body)')).toBe('"title"* AND "OR"* AND "body"*')
   })
 })

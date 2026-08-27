@@ -1,412 +1,368 @@
-export type RootStatus = 'pending' | 'scanning' | 'ready' | 'empty' | 'unavailable' | 'error'
-export type ContentKind = 'fulltext' | 'abstract_only' | 'metadata_only'
-export type ParseStatus = 'ready' | 'incomplete' | 'unreadable'
-export type PaperReadingStatus = 'none' | 'to_read' | 'reading' | 'reviewed'
-export type PaperUserView = 'favorites' | 'reading_list' | 'reviewed'
-export type InsightKind = 'purpose' | 'method' | 'finding' | 'limitation' | 'future_work'
-export type InsightEvidenceSource = 'section' | 'abstract' | 'keyword' | 'reference'
-export type ResearchGraphNodeKind =
-  | 'paper'
-  | 'topic'
-  | 'finding'
-  | 'limitation'
-  | 'future_work'
-  | 'external_reference'
-export type ResearchGraphEdgeKind =
-  | 'has_topic'
-  | 'reports_finding'
-  | 'states_limitation'
-  | 'proposes_future_work'
-  | 'cites'
-export type ResearchSignalBasis =
-  | 'author_stated'
-  | 'local_corpus_hypothesis'
-  | 'local_coverage_gap'
+import { z } from 'zod'
 
-export interface PaperUserSummary {
-  favorite: boolean
-  readingStatus: PaperReadingStatus
-  tags: string[]
-  hasNote: boolean
-  lastOpenedAt: string | null
-  updatedAt: string | null
-}
+export const API_VERSION = 1 as const
+export const PROJECT_SCHEMA_VERSION = 1 as const
+export const NOTE_SCHEMA_VERSION = 1 as const
+export const ACCEPTANCE_SCHEMA_VERSION = 2 as const
 
-export interface PaperUserState extends PaperUserSummary {
-  note: string
-}
+export const contentKindSchema = z.enum(['fulltext', 'abstract_only', 'metadata_only'])
+export type ContentKind = z.infer<typeof contentKindSchema>
 
-export interface PaperUserStatePatch {
-  favorite?: boolean
-  readingStatus?: PaperReadingStatus
-  tags?: string[]
-  note?: string
-}
+export const acceptanceOverallSchema = z.enum([
+  'complete',
+  'degraded',
+  'limited',
+  'failed',
+  'action_required'
+])
+export type AcceptanceOverall = z.infer<typeof acceptanceOverallSchema>
 
-export interface PaperUserDraftInput {
-  note: string
-  tagInput: string
-}
+export const metadataFieldSchema = z.enum([
+  'title',
+  'authors',
+  'journal',
+  'year',
+  'doi',
+  'url',
+  'abstract',
+  'keywords'
+])
+export type MetadataField = z.infer<typeof metadataFieldSchema>
 
-export interface PaperUserDraft extends PaperUserDraftInput {
-  paperId: string
-  baseStateUpdatedAt: string | null
-  updatedAt: string
-}
+export const paperMetadataSchema = z.object({
+  title: z.string(),
+  authors: z.array(z.string()),
+  journal: z.string(),
+  year: z.number().int().min(1000).max(9999).nullable(),
+  doi: z.string(),
+  url: z.string(),
+  abstract: z.string(),
+  keywords: z.array(z.string())
+})
+export type PaperMetadata = z.infer<typeof paperMetadataSchema>
 
-export type AppCloseKind = 'window' | 'quit'
+export const metadataOverridesSchema = z.object({
+  title: z.string().optional(),
+  authors: z.array(z.string()).optional(),
+  journal: z.string().optional(),
+  year: z.union([z.number().int().min(1000).max(9999), z.literal('')]).optional(),
+  doi: z.string().optional(),
+  url: z.string().optional(),
+  abstract: z.string().optional(),
+  keywords: z.array(z.string()).optional()
+})
+export type MetadataOverrides = z.infer<typeof metadataOverridesSchema>
 
-export interface AppCloseRequest {
-  id: string
-  kind: AppCloseKind
-}
+export const projectStatusSchema = z.enum(['connecting', 'scanning', 'ready', 'empty', 'error'])
+export const projectSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  path: z.string(),
+  distribution: z.string().optional(),
+  status: projectStatusSchema,
+  error: z.string().nullable(),
+  paperCount: z.number().int().nonnegative(),
+  issueCount: z.number().int().nonnegative(),
+  years: z.array(z.number().int()),
+  lastScannedAt: z.string().nullable()
+})
+export type ProjectSummary = z.infer<typeof projectSummarySchema>
 
-export interface RootSummary {
-  id: string
-  path: string
-  label: string
-  status: RootStatus
-  error: string | null
-  paperCount: number
-  issueCount: number
-  lastScannedAt: string | null
-  createdAt: string
-}
+export const scanResultSchema = z.object({
+  projectId: z.string(),
+  discovered: z.number().int().nonnegative(),
+  indexed: z.number().int().nonnegative(),
+  unchanged: z.number().int().nonnegative(),
+  removed: z.number().int().nonnegative(),
+  issues: z.number().int().nonnegative(),
+  startedAt: z.string(),
+  finishedAt: z.string()
+})
+export type ScanResult = z.infer<typeof scanResultSchema>
 
-export interface LibrarySummary {
-  paperCount: number
-  fullTextCount: number
-  issueCount: number
-  favoriteCount: number
-  readingListCount: number
-  reviewedCount: number
-  rootCount: number
-  scanning: boolean
-  roots: RootSummary[]
-}
+export const paperListItemSchema = z.object({
+  id: z.string(),
+  relativePath: z.string(),
+  title: z.string(),
+  authors: z.array(z.string()),
+  journal: z.string(),
+  year: z.number().int().nullable(),
+  doi: z.string(),
+  url: z.string(),
+  abstract: z.string(),
+  keywords: z.array(z.string()),
+  source: z.string(),
+  contentKind: contentKindSchema,
+  hasFulltext: z.boolean(),
+  modifiedAt: z.string(),
+  searchSnippet: z.string().nullable(),
+  hasOverrides: z.boolean()
+})
+export type PaperListItem = z.infer<typeof paperListItemSchema>
 
-export interface PaperListItem {
-  id: string
-  title: string
-  authors: string[]
-  year: string | null
-  journal: string | null
-  doi: string | null
-  source: string | null
-  contentKind: ContentKind
-  confidence: string | null
-  warningCount: number
-  sectionCount: number
-  assetCount: number
-  locationCount: number
-  rootIds: string[]
-  rootLabels: string[]
-  updatedAt: string
-  searchSnippet: string | null
-  userState: PaperUserSummary
-}
+export const paperDetailSchema = paperListItemSchema.extend({
+  fetchedMetadata: paperMetadataSchema,
+  overrides: metadataOverridesSchema,
+  markdown: z.string(),
+  markdownRevision: z.string(),
+  assetPaths: z.array(z.string())
+})
+export type PaperDetail = z.infer<typeof paperDetailSchema>
 
-export interface PaperSearchRequest {
-  query?: string
-  rootId?: string
-  attention?: boolean
-  sort?: 'updated' | 'title' | 'year'
-  limit?: number
-  offset?: number
-  userView?: PaperUserView
-}
+export const paperSortFieldSchema = z.enum([
+  'title',
+  'authors',
+  'year',
+  'journal',
+  'contentKind',
+  'source',
+  'modifiedAt'
+])
+export type PaperSortField = z.infer<typeof paperSortFieldSchema>
 
-export interface PaperSection {
-  heading: string
-  level: number
-  kind: string
-  text: string
-}
+export const sortDirectionSchema = z.enum(['asc', 'desc'])
+export type SortDirection = z.infer<typeof sortDirectionSchema>
 
-export interface PaperAsset {
-  kind: string
-  heading: string
-  caption: string | null
-  path: string | null
-  url: string | null
-  section: string | null
-  available: boolean
-  previewUrl?: string | null
-}
+export const paperSearchRequestSchema = z.object({
+  projectId: z.string(),
+  query: z.string().max(500).default(''),
+  year: z.number().int().min(1000).max(9999).nullable().default(null),
+  sortBy: paperSortFieldSchema.default('title'),
+  sortDirection: sortDirectionSchema.default('asc'),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().nonnegative().default(0)
+})
+export type PaperSearchRequest = z.input<typeof paperSearchRequestSchema>
 
-export interface PaperReference {
-  raw: string
-  doi: string | null
-  title: string | null
-  year: string | null
-}
+export const paperSearchResultSchema = z.object({
+  items: z.array(paperListItemSchema),
+  total: z.number().int().nonnegative(),
+  years: z.array(z.number().int())
+})
+export type PaperSearchResult = z.infer<typeof paperSearchResultSchema>
 
-export interface PaperLocation {
-  id: string
-  rootId: string
-  rootLabel: string
-  rootPath: string
-  artifactPath: string
-  relativePath: string
-  detector: string
-  modifiedAt: string
-  parseStatus: ParseStatus
-}
+export const metadataUpdateRequestSchema = z.object({
+  projectId: z.string(),
+  paperId: z.string(),
+  patch: metadataOverridesSchema.default({}),
+  restore: z.array(metadataFieldSchema).default([])
+})
+export type MetadataUpdateRequest = z.input<typeof metadataUpdateRequestSchema>
 
-export interface PaperDetail extends PaperListItem {
-  userState: PaperUserState
-  userDraft: PaperUserDraft | null
-  abstract: string | null
-  published: string | null
-  keywords: string[]
-  warnings: string[]
-  flags: string[]
-  sourceTrail: string[]
-  tokenEstimate: number
-  referenceCount: number
-  references: PaperReference[]
-  sections: PaperSection[]
-  assets: PaperAsset[]
-  locations: PaperLocation[]
-}
+export const noteKindSchema = z.enum(['project', 'paper'])
+export type NoteKind = z.infer<typeof noteKindSchema>
 
-export interface InsightEvidence {
-  id: string
-  source: InsightEvidenceSource
-  paperId: string
-  rootId: string | null
-  revision: string
-  sectionIndex: number | null
-  sectionHeading: string | null
-  sectionKind: string | null
-  sourceIndex: number | null
-  startOffset: number
-  endOffset: number
-  quote: string
-  truncated: boolean
-}
+export const noteDocumentSchema = z.object({
+  projectId: z.string(),
+  kind: noteKindSchema,
+  paperId: z.string().nullable(),
+  content: z.string(),
+  revision: z.string(),
+  modifiedAt: z.string(),
+  path: z.string()
+})
+export type NoteDocument = z.infer<typeof noteDocumentSchema>
 
-export interface DigestItem {
-  id: string
-  kind: InsightKind
-  text: string
-  evidenceId: string
-}
+export const noteReadRequestSchema = z.object({
+  projectId: z.string(),
+  kind: noteKindSchema,
+  paperId: z.string().optional()
+})
+export type NoteReadRequest = z.input<typeof noteReadRequestSchema>
 
-export interface PaperDigestCoverage {
-  contentKind: ContentKind
-  availableKinds: InsightKind[]
-  missingKinds: InsightKind[]
-  limited: boolean
-  message: string | null
-}
+export const noteWriteRequestSchema = noteReadRequestSchema.extend({
+  content: z.string().max(2_000_000),
+  expectedRevision: z.string()
+})
+export type NoteWriteRequest = z.input<typeof noteWriteRequestSchema>
 
-export interface PaperDigest {
-  paperId: string
-  rootId: string | null
-  revision: string
-  title: string
-  items: DigestItem[]
-  evidence: InsightEvidence[]
-  coverage: PaperDigestCoverage
-  disclaimer: string
-}
+export const fetchItemStageSchema = z.enum([
+  'queued',
+  'identity',
+  'fetching',
+  'acceptance',
+  'terminal'
+])
 
-export interface ResearchGraphNode {
-  id: string
-  kind: ResearchGraphNodeKind
-  label: string
-  paperId: string | null
-  doi: string | null
-  year: string | null
-  evidenceIds: string[]
-}
+export const fetchItemStateSchema = z.enum([
+  'pending',
+  'running',
+  'complete',
+  'degraded',
+  'limited',
+  'failed',
+  'action_required',
+  'cancelled'
+])
 
-export interface ResearchGraphEdge {
-  id: string
-  kind: ResearchGraphEdgeKind
-  sourceId: string
-  targetId: string
-  evidenceIds: string[]
-}
+export const identityCandidateSchema = z.object({
+  doi: z.string().nullable(),
+  title: z.string(),
+  url: z.string().nullable()
+})
+export type IdentityCandidate = z.infer<typeof identityCandidateSchema>
 
-export interface ResearchSignal {
-  id: string
-  basis: ResearchSignalBasis
-  title: string
-  statement: string
-  rationale: string
-  paperIds: string[]
-  evidenceIds: string[]
-  noveltyRequiresExternalChecking: boolean
-}
+export const fetchItemSchema = z.object({
+  index: z.number().int().positive(),
+  query: z.string(),
+  stage: fetchItemStageSchema,
+  state: fetchItemStateSchema,
+  attempt: z.number().int().positive(),
+  canonicalDoi: z.string().nullable(),
+  canonicalUrl: z.string().nullable(),
+  title: z.string().nullable(),
+  provider: z.string().nullable(),
+  reason: z.string().nullable(),
+  errorCode: z.string().nullable(),
+  candidates: z.array(identityCandidateSchema),
+  acceptance: acceptanceOverallSchema.nullable(),
+  contentKind: contentKindSchema.nullable(),
+  outputPath: z.string().nullable(),
+  outputSha256: z.string().nullable(),
+  existingPaperId: z.string().nullable(),
+  completionOrder: z.number().int().positive().nullable()
+})
+export type FetchItem = z.infer<typeof fetchItemSchema>
 
-export interface ResearchLandscapeRequest {
-  rootId?: string
-  limit?: number
-}
+export const fetchRunStateSchema = z.enum([
+  'queued',
+  'running',
+  'cancelling',
+  'completed',
+  'cancelled',
+  'interrupted'
+])
 
-export interface ResearchLandscapeTruncation {
-  truncated: boolean
-  omittedPaperCount: number
-  omittedNodeCount: number
-  omittedEdgeCount: number
-  omittedEvidenceCount: number
-}
+export const fetchRunSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string(),
+  projectId: z.string(),
+  state: fetchRunStateSchema,
+  concurrency: z.number().int().min(1).max(8),
+  refreshPaperId: z.string().nullable(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  manifestPath: z.string(),
+  executionIndexes: z.array(z.number().int().positive()).max(50),
+  items: z.array(fetchItemSchema).max(50)
+})
+export type FetchRun = z.infer<typeof fetchRunSchema>
 
-export interface ResearchLandscape {
-  rootId: string | null
-  paperCount: number
-  analyzedPaperCount: number
-  nodes: ResearchGraphNode[]
-  edges: ResearchGraphEdge[]
-  evidence: InsightEvidence[]
-  signals: ResearchSignal[]
-  truncation: ResearchLandscapeTruncation
-  noveltyRequiresExternalChecking: true
-  disclaimer: string
-}
+export const createFetchRunRequestSchema = z.object({
+  projectId: z.string(),
+  inputs: z.array(z.string().trim().min(1).max(4_000)).min(1).max(50),
+  concurrency: z.number().int().min(1).max(8).default(4),
+  refreshPaperId: z.string().optional()
+})
+export type CreateFetchRunRequest = z.input<typeof createFetchRunRequestSchema>
 
-export interface IndexIssue {
-  id: string
-  rootId: string
-  rootLabel: string
-  path: string
-  relativePath: string
-  message: string
-  updatedAt: string
-}
+export const dependencyCheckSchema = z.object({
+  name: z.enum(['node', 'paper-fetch', 'git']),
+  ok: z.boolean(),
+  version: z.string().nullable(),
+  required: z.string(),
+  repairCommand: z.string(),
+  reason: z.string().nullable()
+})
 
-export interface ScanResult {
-  rootId: string
-  discovered: number
-  indexed: number
-  unchanged: number
-  issues: number
-  removed: number
-  startedAt: string
-  finishedAt: string
-}
+export const dependencyReportSchema = z.object({
+  distribution: z.string(),
+  ready: z.boolean(),
+  checks: z.array(dependencyCheckSchema)
+})
+export type DependencyReport = z.infer<typeof dependencyReportSchema>
 
-export interface AgentRelaySetup {
-  available: boolean
-  databasePath: string
-  serverPath: string
-  codexConfig: string
-  cliCommand: string
-  testPrompt: string
-  error: string | null
-}
+export const serviceEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('scan.started'), projectId: z.string(), at: z.string() }),
+  z.object({
+    type: z.literal('scan.completed'),
+    projectId: z.string(),
+    at: z.string(),
+    result: scanResultSchema
+  }),
+  z.object({ type: z.literal('papers.changed'), projectId: z.string(), at: z.string() }),
+  z.object({
+    type: z.literal('note.changed'),
+    projectId: z.string(),
+    at: z.string(),
+    kind: noteKindSchema,
+    paperId: z.string().nullable(),
+    revision: z.string()
+  }),
+  z.object({
+    type: z.literal('fetch.changed'),
+    projectId: z.string(),
+    at: z.string(),
+    run: fetchRunSchema
+  })
+])
+export type ServiceEvent = z.infer<typeof serviceEventSchema>
 
-export type AgentTerminalAccess = 'read-only' | 'workspace-write'
+export const apiErrorSchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    details: z.unknown().optional()
+  })
+})
+export type ApiErrorBody = z.infer<typeof apiErrorSchema>
 
-export interface AgentTerminalStartRequest {
-  rootId: string
-  access?: AgentTerminalAccess
-  cols?: number
-  rows?: number
-}
-
-export interface AgentTerminalSession {
-  id: string
-  rootId: string
-  rootLabel: string
-  cwd: string
-  access: AgentTerminalAccess
-  state: 'running'
-  startedAt: string
-}
-
-export interface AgentTerminalOutput {
-  sessionId: string
-  data: string
-}
-
-export type AgentTerminalExitReason = 'exited' | 'stopped' | 'error'
-
-export interface AgentTerminalExit {
-  sessionId: string
-  exitCode: number | null
-  signal: number | null
-  reason: AgentTerminalExitReason
-}
-
-export interface PaperRelayBridge {
-  library: {
-    summary(): Promise<LibrarySummary>
+export interface LitRootBridge {
+  system: {
+    listDistributions(): Promise<string[]>
+    diagnose(distribution: string): Promise<DependencyReport>
+    pickProjectPath(distribution: string): Promise<string | null>
+    openExternal(url: string): Promise<void>
+    copyText(text: string): Promise<void>
   }
-  roots: {
-    list(): Promise<RootSummary[]>
-    addWithPicker(): Promise<RootSummary | null>
-    rescan(rootId: string): Promise<ScanResult>
-    remove(rootId: string): Promise<void>
+  projects: {
+    list(): Promise<ProjectSummary[]>
+    add(distribution: string, path: string, name?: string): Promise<ProjectSummary>
+    remove(projectId: string): Promise<void>
+    scan(projectId: string): Promise<ScanResult>
   }
   papers: {
-    search(request: PaperSearchRequest): Promise<PaperListItem[]>
-    get(paperId: string, rootId?: string): Promise<PaperDetail | null>
-    issues(rootId?: string): Promise<IndexIssue[]>
-    updateUserState(paperId: string, patch: PaperUserStatePatch): Promise<PaperUserState>
-    saveDraft(paperId: string, draft: PaperUserDraftInput): Promise<PaperUserDraft>
-    discardDraft(paperId: string): Promise<void>
-    commitDraft(paperId: string): Promise<PaperUserState>
-    markOpened(paperId: string): Promise<PaperUserState>
+    search(request: PaperSearchRequest): Promise<PaperSearchResult>
+    get(projectId: string, paperId: string): Promise<PaperDetail | null>
+    updateMetadata(request: MetadataUpdateRequest): Promise<PaperDetail>
+    assetUrl(projectId: string, paperId: string, source: string): string
   }
-  insights: {
-    paper(paperId: string, rootId?: string): Promise<PaperDigest>
-    landscape(request: ResearchLandscapeRequest): Promise<ResearchLandscape>
+  notes: {
+    read(request: NoteReadRequest): Promise<NoteDocument>
+    write(request: NoteWriteRequest): Promise<NoteDocument>
   }
-  agentRelay: {
-    setup(): Promise<AgentRelaySetup>
-    copyCodexConfig(): Promise<void>
-    copyTestPrompt(): Promise<void>
-    copyPaperReference(paperId: string, rootId?: string): Promise<void>
-    copyRootContext(rootId: string): Promise<void>
+  fetch: {
+    create(request: CreateFetchRunRequest): Promise<FetchRun>
+    get(projectId: string, runId: string): Promise<FetchRun>
+    list(projectId: string): Promise<FetchRun[]>
+    cancel(projectId: string, runId: string): Promise<FetchRun>
+    resume(projectId: string, runId: string): Promise<FetchRun>
   }
-  agentTerminal: {
-    start(request: AgentTerminalStartRequest): Promise<AgentTerminalSession | null>
-    write(sessionId: string, data: string): Promise<void>
-    resize(sessionId: string, cols: number, rows: number): Promise<void>
-    stop(sessionId: string): Promise<void>
-    onOutput(listener: (event: AgentTerminalOutput) => void): () => void
-    onExit(listener: (event: AgentTerminalExit) => void): () => void
-  }
-  lifecycle: {
-    respondToClose(requestId: string, proceed: boolean): Promise<void>
-    onCloseRequested(listener: (request: AppCloseRequest) => void): () => void
-  }
-  system: {
-    revealLocation(locationId: string): Promise<void>
+  events: {
+    subscribe(listener: (event: ServiceEvent) => void): () => void
   }
 }
 
 export const IPC = {
-  librarySummary: 'library:summary',
-  rootsList: 'roots:list',
-  rootsAddWithPicker: 'roots:add-with-picker',
-  rootsRescan: 'roots:rescan',
-  rootsRemove: 'roots:remove',
-  papersSearch: 'papers:search',
-  papersGet: 'papers:get',
-  papersIssues: 'papers:issues',
-  papersUpdateUserState: 'papers:update-user-state',
-  papersSaveDraft: 'papers:save-draft',
-  papersDiscardDraft: 'papers:discard-draft',
-  papersCommitDraft: 'papers:commit-draft',
-  papersMarkOpened: 'papers:mark-opened',
-  insightsPaper: 'insights:paper',
-  insightsLandscape: 'insights:landscape',
-  agentRelaySetup: 'agent-relay:setup',
-  agentRelayCopyCodexConfig: 'agent-relay:copy-codex-config',
-  agentRelayCopyTestPrompt: 'agent-relay:copy-test-prompt',
-  agentRelayCopyPaperReference: 'agent-relay:copy-paper-reference',
-  agentRelayCopyRootContext: 'agent-relay:copy-root-context',
-  agentTerminalStart: 'agent-terminal:start',
-  agentTerminalWrite: 'agent-terminal:write',
-  agentTerminalResize: 'agent-terminal:resize',
-  agentTerminalStop: 'agent-terminal:stop',
-  agentTerminalOutput: 'agent-terminal:output',
-  agentTerminalExit: 'agent-terminal:exit',
-  lifecycleCloseRequested: 'lifecycle:close-requested',
-  lifecycleRespondToClose: 'lifecycle:respond-to-close',
-  systemRevealLocation: 'system:reveal-location'
+  systemListDistributions: 'litroot:system:list-distributions',
+  systemDiagnose: 'litroot:system:diagnose',
+  systemPickProjectPath: 'litroot:system:pick-project-path',
+  systemOpenExternal: 'litroot:system:open-external',
+  systemCopyText: 'litroot:system:copy-text',
+  projectsList: 'litroot:projects:list',
+  projectsAdd: 'litroot:projects:add',
+  projectsRemove: 'litroot:projects:remove',
+  projectsScan: 'litroot:projects:scan',
+  papersSearch: 'litroot:papers:search',
+  papersGet: 'litroot:papers:get',
+  papersUpdateMetadata: 'litroot:papers:update-metadata',
+  notesRead: 'litroot:notes:read',
+  notesWrite: 'litroot:notes:write',
+  fetchCreate: 'litroot:fetch:create',
+  fetchGet: 'litroot:fetch:get',
+  fetchList: 'litroot:fetch:list',
+  fetchCancel: 'litroot:fetch:cancel',
+  fetchResume: 'litroot:fetch:resume',
+  eventsPush: 'litroot:events:push'
 } as const

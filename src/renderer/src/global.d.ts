@@ -1,8 +1,8 @@
-import type { PaperRelayBridge } from '../../shared/contracts'
+import type { LitRootBridge } from '../../shared/contracts'
 
 declare global {
   interface Window {
-    paperrelay?: PaperRelayBridge
+    litroot?: LitRootBridge
   }
 }
 

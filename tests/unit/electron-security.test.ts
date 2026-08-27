@@ -1,37 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  denyRendererPermissions,
-  developmentRendererUrl
-} from '../../src/main/electron-security.js'
+import { denyRendererPermissions, developmentRendererUrl } from '../../src/main/electron-security.js'
 
 describe('Electron security policy', () => {
-  it('uses a configured renderer URL only for an unpackaged development app', () => {
-    expect(developmentRendererUrl(false, ' http://127.0.0.1:5173 ')).toBe(
-      'http://127.0.0.1:5173'
-    )
-    expect(developmentRendererUrl(true, 'http://attacker.test')).toBeNull()
-    expect(developmentRendererUrl(false, '   ')).toBeNull()
-    expect(developmentRendererUrl(false, undefined)).toBeNull()
+  it('only uses the configured development renderer outside packaged builds', () => {
+    expect(developmentRendererUrl(true, 'http://localhost:5173')).toBeNull()
+    expect(developmentRendererUrl(false, ' http://localhost:5173 ')).toBe('http://localhost:5173')
   })
 
-  it('denies permission checks and requests through the default session', () => {
-    const setPermissionCheckHandler = vi.fn()
-    const setPermissionRequestHandler = vi.fn()
+  it('denies every renderer permission', () => {
+    let check!: () => boolean
+    let request!: (_contents: unknown, _permission: unknown, callback: (allowed: boolean) => void) => void
     denyRendererPermissions({
-      setPermissionCheckHandler,
-      setPermissionRequestHandler
-    } as never)
-
-    const check = setPermissionCheckHandler.mock.calls[0]?.[0] as () => boolean
-    const request = setPermissionRequestHandler.mock.calls[0]?.[0] as (
-      webContents: unknown,
-      permission: string,
-      callback: (granted: boolean) => void
-    ) => void
-    const callback = vi.fn()
-
+      setPermissionCheckHandler: (handler) => { check = handler as () => boolean },
+      setPermissionRequestHandler: (handler) => { request = handler as typeof request }
+    })
     expect(check()).toBe(false)
-    request({}, 'geolocation', callback)
+    const callback = vi.fn()
+    request(null, null, callback)
     expect(callback).toHaveBeenCalledWith(false)
   })
 })

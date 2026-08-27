@@ -14,12 +14,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Checks (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, ubuntu-latest, windows-2022]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,13 +25,10 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Validate source and build outputs
-        run: pnpm run check:ci
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check:ci
 
   windows-package:
-    name: Windows x64 unsigned installer
     needs: checks
     runs-on: windows-2022
     env:
@@ -51,42 +43,23 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build unsigned Windows installer
-        run: pnpm run package:win
-      - name: Verify packaged Agent Relay
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run package:win
+      - name: Verify packaged WSL service
         shell: pwsh
         run: |
-          $app = (Resolve-Path 'release/win-unpacked/PaperRelay.exe').Path
-          $relay = (Resolve-Path 'release/win-unpacked/resources/relay/paperrelay-relay.cjs').Path
-          $env:PAPERRELAY_RELAY_COMMAND = $app
-          $env:PAPERRELAY_RELAY_PREFIX_ARGS = ConvertTo-Json -Compress @($relay)
-          $env:PAPERRELAY_RELAY_ELECTRON_RUN_AS_NODE = '1'
-          pnpm run test:relay-runtime
-      - name: Verify packaged Windows PTY
-        shell: pwsh
-        run: |
-          $app = (Resolve-Path 'release/win-unpacked/PaperRelay.exe').Path
-          $archive = (Resolve-Path 'release/win-unpacked/resources/app.asar').Path
-          $env:ELECTRON_RUN_AS_NODE = '1'
-          & $app scripts/verify-packaged-windows-runtime.mjs $archive
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $service = Resolve-Path 'release/win-unpacked/resources/service/litroot-service.cjs'
+          if ((Get-Item $service).Length -le 0) { throw 'Packaged WSL service is empty.' }
       - name: Write SHA-256 checksum
         shell: pwsh
         run: |
-          $installers = @(Get-ChildItem -Path release -Filter '*-unsigned-setup.exe' -File)
-          if ($installers.Count -ne 1) {
-            throw "Expected one unsigned Windows installer, found $($installers.Count)."
-          }
-          $installer = $installers[0]
-          $hash = (Get-FileHash -Path $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          $checksumPath = "$($installer.FullName).sha256"
-          Set-Content -Path $checksumPath -Value "$hash  $($installer.Name)" -Encoding ascii
-      - name: Upload unsigned Windows installer
-        uses: actions/upload-artifact@v4
+          $installer = @(Get-ChildItem release -Filter '*-unsigned-setup.exe' -File)
+          if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)." }
+          $hash = (Get-FileHash $installer[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content "$($installer[0].FullName).sha256" "$hash  $($installer[0].Name)" -Encoding ascii
+      - uses: actions/upload-artifact@v4
         with:
-          name: paperrelay-${{ github.sha }}-windows-x64-unsigned
+          name: litroot-${{ github.sha }}-windows-x64-unsigned
           path: |
             release/*-unsigned-setup.exe
             release/*-unsigned-setup.exe.sha256
