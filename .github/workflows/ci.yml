@@ -44,6 +44,7 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm config set cache-dir D:\pnpm-cache
       - run: pnpm run package:win
       - name: Verify packaged WSL service
         shell: pwsh
