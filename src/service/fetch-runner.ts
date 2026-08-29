@@ -453,6 +453,7 @@ export class PaperFetchRunner {
     }
 
     this.resolveMergedInputs(run)
+    await this.scanner.scan()
     if ((run.state as string) === 'interrupted') {
       for (const item of run.items) {
         if (['pending', 'running'].includes(item.state)) {
@@ -476,7 +477,6 @@ export class PaperFetchRunner {
     }
     run.finishedAt = now()
     await this.persist(run)
-    await this.scanner.scan()
   }
 
   private batchArguments(run: FetchRun, files: RunFiles, resume: boolean): string[] {
