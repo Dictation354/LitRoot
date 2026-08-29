@@ -6,6 +6,10 @@ import type {
   NoteReadRequest,
   NoteWriteRequest,
   PaperDetail,
+  PaperExportExecuteRequest,
+  PaperExportPlan,
+  PaperExportRequest,
+  PaperExportResult,
   PaperSearchRequest,
   PaperSearchResult,
   ProjectSummary,
@@ -49,7 +53,7 @@ export class LitRootServiceClient {
         : null
       throw new ServiceClientError(
         typeof error?.code === 'string' ? error.code : 'service_error',
-        typeof error?.message === 'string' ? error.message : `WSL 服务返回 HTTP ${response.status}。`,
+        typeof error?.message === 'string' ? error.message : `LitRoot 服务返回 HTTP ${response.status}。`,
         response.status,
         error?.details
       )
@@ -87,6 +91,25 @@ export class LitRootServiceClient {
     return this.request(
       `/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`
     )
+  }
+
+  markPaperOpened(projectId: string, paperId: string): Promise<string> {
+    return this.request<{ openedAt: string }>(
+      `/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/opened`,
+      { method: 'POST' }
+    ).then((result) => result.openedAt)
+  }
+
+  planExport(request: PaperExportRequest): Promise<PaperExportPlan> {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/export/plan`, {
+      method: 'POST', body: JSON.stringify(request)
+    })
+  }
+
+  exportPapers(request: PaperExportExecuteRequest): Promise<PaperExportResult> {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/export/execute`, {
+      method: 'POST', body: JSON.stringify(request)
+    })
   }
 
   updateMetadata(request: MetadataUpdateRequest): Promise<PaperDetail> {

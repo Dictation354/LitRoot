@@ -8,6 +8,7 @@ import {
   saveLibraryPreferences
 } from '../../src/renderer/src/library-preferences.js'
 import { paperSearchRequestSchema } from '../../src/shared/contracts.js'
+import { libraryAuthorLine } from '../../src/renderer/src/LibraryTable.js'
 
 class MemoryStorage {
   readonly values = new Map<string, string>()
@@ -22,6 +23,14 @@ class MemoryStorage {
 }
 
 describe('library preferences', () => {
+  it('shortens author lists starting with the third author', () => {
+    expect(libraryAuthorLine([])).toBe('—')
+    expect(libraryAuthorLine(['Ada'])).toBe('Ada')
+    expect(libraryAuthorLine(['Ada', 'Grace'])).toBe('Ada; Grace')
+    expect(libraryAuthorLine(['Ada', 'Grace', 'Linus'])).toBe('Ada et al.')
+    expect(libraryAuthorLine(['Ada', 'Grace', 'Linus', 'Barbara'])).toBe('Ada et al.')
+  })
+
   it('persists column visibility, order, width and sorting', () => {
     const storage = new MemoryStorage()
     const defaults = defaultLibraryPreferences()
@@ -52,7 +61,7 @@ describe('library preferences', () => {
       sortDirection: 'sideways'
     })
 
-    expect(repaired.columns).toHaveLength(8)
+    expect(repaired.columns).toHaveLength(10)
     expect(repaired.columns.find((column) => column.key === 'title')).toMatchObject({
       visible: true,
       width: 64

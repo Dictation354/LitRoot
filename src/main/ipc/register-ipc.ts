@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, clipboard, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from 'electron'
 import { z } from 'zod'
 import {
   createFetchRunRequestSchema,
@@ -6,35 +6,39 @@ import {
   metadataUpdateRequestSchema,
   noteReadRequestSchema,
   noteWriteRequestSchema,
-  paperSearchRequestSchema
+  paperSearchRequestSchema,
+  runtimeTargetSchema
 } from '../../shared/contracts.js'
 import type { AppController } from '../app-controller.js'
 
 const identifier = z.string().regex(/^[a-z]+_[a-f0-9]{24}$/)
-const distribution = z.string().trim().min(1).max(200).refine((value) => !/[\0\r\n]/.test(value))
 
-function authorize(event: IpcMainInvokeEvent, window: BrowserWindow): void {
+function authorize(event: IpcMainInvokeEvent, windows: () => BrowserWindow[]): void {
+  const window = BrowserWindow.fromWebContents(event.sender)
   if (
-    event.sender !== window.webContents ||
-    event.senderFrame !== window.webContents.mainFrame ||
-    BrowserWindow.fromWebContents(event.sender) !== window
+    !window || !windows().includes(window) ||
+    event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame
   ) {
-    throw new Error('该操作只允许 LitRoot 主窗口调用。')
+    throw new Error('该操作只允许 LitRoot 受管窗口调用。')
   }
 }
 
-export function registerIpc(controller: AppController, window: BrowserWindow): void {
+export function registerIpc(
+  controller: AppController,
+  windows: () => BrowserWindow[],
+  openPaperWindow: (projectId: string, paperId: string) => Promise<void>
+): void {
   const trusted = <T>(handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => T) =>
     (event: IpcMainInvokeEvent, ...args: unknown[]): T => {
-      authorize(event, window)
+      authorize(event, windows)
       return handler(event, ...args)
     }
 
-  ipcMain.handle(IPC.systemListDistributions, trusted(() => controller.wsl.listDistributions()))
+  ipcMain.handle(IPC.systemListRuntimes, trusted(() => controller.runtimes.listRuntimes()))
   ipcMain.handle(IPC.systemDiagnose, trusted((_event, value) =>
-    controller.wsl.diagnose(distribution.parse(value))))
+    controller.runtimes.diagnose(runtimeTargetSchema.parse(value))))
   ipcMain.handle(IPC.systemPickProjectPath, trusted((_event, value) =>
-    controller.pickProjectPath(window, distribution.parse(value))))
+    controller.pickProjectPath(BrowserWindow.fromWebContents(_event.sender)!, runtimeTargetSchema.parse(value))))
   ipcMain.handle(IPC.systemOpenExternal, trusted(async (_event, value) => {
     const url = z.string().url().parse(value)
     const parsed = new URL(url)
@@ -48,9 +52,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow): v
   }))
 
   ipcMain.handle(IPC.projectsList, trusted(() => controller.listProjects()))
-  ipcMain.handle(IPC.projectsAdd, trusted((_event, distro, path, name) =>
+  ipcMain.handle(IPC.projectsAdd, trusted((_event, target, path, name) =>
     controller.addProject(
-      distribution.parse(distro),
+      runtimeTargetSchema.parse(target),
       z.string().trim().min(1).max(8_000).parse(path),
       z.string().trim().min(1).max(200).optional().parse(name)
     )))
@@ -65,6 +69,36 @@ export function registerIpc(controller: AppController, window: BrowserWindow): v
     controller.getPaper(identifier.parse(projectId), identifier.parse(paperId))))
   ipcMain.handle(IPC.papersUpdateMetadata, trusted((_event, value) =>
     controller.updateMetadata(metadataUpdateRequestSchema.parse(value))))
+  ipcMain.handle(IPC.papersMarkOpened, trusted((_event, projectId, paperId) =>
+    controller.markPaperOpened(identifier.parse(projectId), identifier.parse(paperId))))
+  ipcMain.handle(IPC.papersOpenWindow, trusted(async (_event, projectId, paperId) => {
+    const parsedProjectId = identifier.parse(projectId)
+    const parsedPaperId = identifier.parse(paperId)
+    await controller.markPaperOpened(parsedProjectId, parsedPaperId)
+    await openPaperWindow(parsedProjectId, parsedPaperId)
+  }))
+  ipcMain.handle(IPC.papersReveal, trusted(async (_event, projectId, paperId) => {
+    const path = await controller.paperHostPath(identifier.parse(projectId), identifier.parse(paperId))
+    shell.showItemInFolder(path)
+  }))
+  ipcMain.handle(IPC.papersExport, trusted((_event, projectId, paperIds, includeImages) =>
+    controller.exportPapers(
+      BrowserWindow.fromWebContents(_event.sender)!,
+      identifier.parse(projectId),
+      z.array(identifier).min(1).max(50).parse(paperIds),
+      z.boolean().parse(includeImages)
+    )))
+  ipcMain.handle(IPC.papersCopyImage, trusted(async (_event, projectId, paperId, source) => {
+    const response = await controller.asset(
+      identifier.parse(projectId),
+      identifier.parse(paperId),
+      z.string().min(1).max(8_000).parse(source)
+    )
+    if (!response.ok) throw new Error('图片不存在或不允许访问。')
+    const image = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()))
+    if (image.isEmpty()) throw new Error('无法解码这张图片。')
+    clipboard.writeImage(image)
+  }))
 
   ipcMain.handle(IPC.notesRead, trusted((_event, value) =>
     controller.readNote(noteReadRequestSchema.parse(value))))

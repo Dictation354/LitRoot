@@ -12,6 +12,7 @@ import type { ServiceEventBus } from './events.js'
 interface Candidate {
   path: string
   relativePath: string
+  addedAt: string | null
   modifiedAt: string
   size: number
 }
@@ -41,6 +42,7 @@ async function walkPapers(layout: ProjectLayout, signal?: AbortSignal): Promise<
       candidates.push({
         path: canonical,
         relativePath: portableRelativePath(relative(layout.root, canonical)),
+        addedAt: info.birthtimeMs > 0 ? info.birthtime.toISOString() : null,
         modifiedAt: info.mtime.toISOString(),
         size: info.size
       })
@@ -119,7 +121,9 @@ export class ProjectScanner {
             continue
           }
         }
-        const knownFingerprint = sha256(`${raw}\0${JSON.stringify(knownStored?.overrides ?? {})}`)
+        const knownFingerprint = sha256(
+          `${raw}\0${JSON.stringify(knownStored?.overrides ?? {})}\0${candidate.addedAt ?? ''}`
+        )
         if (this.database.fingerprint(candidate.relativePath) === knownFingerprint) {
           seen.add(candidate.relativePath)
           counts.unchanged += 1
@@ -168,10 +172,11 @@ export class ProjectScanner {
           id: paperId,
           relativePath: candidate.relativePath,
           filePath: candidate.path,
-          fingerprint: sha256(`${raw}\0${JSON.stringify(overrides)}`),
+          fingerprint: sha256(`${raw}\0${JSON.stringify(overrides)}\0${candidate.addedAt ?? ''}`),
           rawMarkdown: raw,
           parsed: parsed.paper,
           overrides,
+          addedAt: candidate.addedAt,
           modifiedAt: candidate.modifiedAt
         })
         await this.metadata.write(paperId, candidate.relativePath, overrides)

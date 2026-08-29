@@ -6,10 +6,12 @@
 React renderer
   │ narrow Electron IPC (Zod validation)
   ▼
-Windows Electron main
+Electron main on Windows / Linux / macOS
   │ authenticated HTTP/SSE over random localhost port
   ▼
-single-file Node 24 service in selected WSL distribution
+single-file service
+  ├── native: Electron bundled Node
+  └── Windows WSL: Node 24 in selected distribution
   ├── one ProjectDatabase per project
   ├── papers/ scanner + watcher
   ├── YAML metadata sidecars
@@ -18,7 +20,9 @@ single-file Node 24 service in selected WSL distribution
   └── paper-fetch process runner + acceptance/import gate
 ```
 
-The renderer never receives a session token, raw filesystem handle, or process primitive. Asset URLs contain only a project ID, paper ID, and Markdown-relative source. Electron authenticates the matching WSL request; the service checks the paper reference and canonical realpath again.
+The renderer never receives a session token, raw filesystem handle, or process primitive. Asset URLs contain only a project ID, paper ID, and Markdown-relative source. Electron authenticates the matching runtime request; the service checks the paper reference and canonical realpath again. Native projects use host paths directly, while WSL projects cross the host boundary only through validated `wslpath` conversions.
+
+Native Windows resolves the official `paper-fetch.cmd` installation to its private Python executable and fixed module prefix. Linux and macOS resolve the executable from the user's login shell. Fetch queries remain direct subprocess arguments with `shell=false`; only WSL uses the fixed `exec "$@"` login-shell trampoline.
 
 ## Identity and metadata
 

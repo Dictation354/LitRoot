@@ -1,5 +1,5 @@
 import { app, dialog, type BrowserWindow } from 'electron'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type {
   CreateFetchRunRequest,
@@ -7,40 +7,47 @@ import type {
   NoteReadRequest,
   NoteWriteRequest,
   PaperSearchRequest,
+  PaperExportResult,
   ProjectSummary,
+  RuntimeTarget,
   ServiceEvent
 } from '../shared/contracts.js'
+import { runtimeTargetKey, runtimeTargetSchema } from '../shared/contracts.js'
 import { atomicWriteFile } from '../service/safe-fs.js'
-import { WslServiceManager } from './wsl-manager.js'
+import { ServiceRuntimeManager } from './wsl-manager.js'
 
 interface ConnectionRecord {
   projectId: string
-  distribution: string
+  runtime: RuntimeTarget
   path: string
   name: string
 }
 
 interface ConnectionDocument {
-  schemaVersion: 1
+  schemaVersion: 2
   projects: ConnectionRecord[]
 }
 
-function parseConnections(value: unknown): ConnectionRecord[] {
+export function parseConnections(value: unknown): ConnectionRecord[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return []
   const projects = (value as Record<string, unknown>).projects
   if (!Array.isArray(projects)) return []
   return projects.flatMap((item): ConnectionRecord[] => {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) return []
     const record = item as Record<string, unknown>
+    const runtime = runtimeTargetSchema.safeParse(record.runtime)
+    const legacyDistribution = typeof record.distribution === 'string'
+      ? record.distribution.trim()
+      : ''
     if (
       typeof record.projectId !== 'string' ||
-      typeof record.distribution !== 'string' ||
+      (!runtime.success && !legacyDistribution) ||
       typeof record.path !== 'string' ||
       typeof record.name !== 'string'
     ) return []
     return [{
       projectId: record.projectId,
-      distribution: record.distribution,
+      runtime: runtime.success ? runtime.data : { kind: 'wsl', distribution: legacyDistribution },
       path: record.path,
       name: record.name
     }]
@@ -48,12 +55,12 @@ function parseConnections(value: unknown): ConnectionRecord[] {
 }
 
 export class AppController {
-  readonly wsl: WslServiceManager
+  readonly runtimes: ServiceRuntimeManager
   private readonly connectionsPath = join(app.getPath('userData'), 'projects.json')
   private connections: ConnectionRecord[] = []
 
   constructor(onEvent: (event: ServiceEvent) => void) {
-    this.wsl = new WslServiceManager(onEvent)
+    this.runtimes = new ServiceRuntimeManager(onEvent)
   }
 
   async start(): Promise<void> {
@@ -67,27 +74,29 @@ export class AppController {
   async listProjects(): Promise<ProjectSummary[]> {
     const grouped = new Map<string, ConnectionRecord[]>()
     for (const connection of this.connections) {
-      grouped.set(connection.distribution, [
-        ...(grouped.get(connection.distribution) ?? []),
+      const key = runtimeTargetKey(connection.runtime)
+      grouped.set(key, [
+        ...(grouped.get(key) ?? []),
         connection
       ])
     }
     const summaries: ProjectSummary[] = []
-    for (const [distribution, connections] of grouped) {
+    for (const connections of grouped.values()) {
+      const runtime = connections[0]!.runtime
       try {
-        const client = await this.wsl.client(distribution)
+        const client = await this.runtimes.client(runtime)
         const remote = new Map((await client.listProjects()).map((project) => [project.id, project]))
         for (const connection of connections) {
           const project = remote.get(connection.projectId)
           summaries.push(project
-            ? { ...project, distribution }
+            ? { ...project, runtime }
             : {
                 id: connection.projectId,
                 name: connection.name,
                 path: connection.path,
-                distribution,
+                runtime,
                 status: 'error',
-                error: '项目未在该 WSL 服务中注册，请重新连接。',
+                error: '项目未在该运行环境中注册，请重新连接。',
                 paperCount: 0,
                 issueCount: 0,
                 years: [],
@@ -100,7 +109,7 @@ export class AppController {
             id: connection.projectId,
             name: connection.name,
             path: connection.path,
-            distribution,
+            runtime,
             status: 'error',
             error: error instanceof Error ? error.message : String(error),
             paperCount: 0,
@@ -114,30 +123,30 @@ export class AppController {
     return summaries.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
   }
 
-  async addProject(distribution: string, path: string, name?: string): Promise<ProjectSummary> {
-    const client = await this.wsl.client(distribution)
+  async addProject(runtime: RuntimeTarget, path: string, name?: string): Promise<ProjectSummary> {
+    const client = await this.runtimes.client(runtime)
     const project = await client.registerProject(path, name)
     this.connections = this.connections.filter((item) => item.projectId !== project.id)
     this.connections.push({
       projectId: project.id,
-      distribution,
+      runtime,
       path: project.path,
       name: project.name
     })
     await this.persist()
-    return { ...project, distribution }
+    return { ...project, runtime }
   }
 
   async removeProject(projectId: string): Promise<void> {
     const connection = this.connection(projectId)
-    await (await this.wsl.client(connection.distribution)).removeProject(projectId)
+    await (await this.runtimes.client(connection.runtime)).removeProject(projectId)
     this.connections = this.connections.filter((item) => item.projectId !== projectId)
     await this.persist()
   }
 
-  async pickProjectPath(window: BrowserWindow, distribution: string): Promise<string | null> {
-    const defaultPath = process.platform === 'win32'
-      ? `\\\\wsl.localhost\\${distribution}\\`
+  async pickProjectPath(window: BrowserWindow, runtime: RuntimeTarget): Promise<string | null> {
+    const defaultPath = runtime.kind === 'wsl'
+      ? `\\\\wsl.localhost\\${runtime.distribution}\\`
       : undefined
     const result = await dialog.showOpenDialog(window, {
       title: '选择 LitRoot 项目目录',
@@ -147,12 +156,12 @@ export class AppController {
     })
     const selected = result.filePaths[0]
     if (result.canceled || !selected) return null
-    return this.wsl.toWslPath(distribution, selected)
+    return this.runtimes.toServicePath(runtime, selected)
   }
 
   clientFor(projectId: string) {
     const connection = this.connection(projectId)
-    return this.wsl.client(connection.distribution)
+    return this.runtimes.client(connection.runtime)
   }
 
   scan(projectId: string) {
@@ -165,6 +174,58 @@ export class AppController {
 
   getPaper(projectId: string, paperId: string) {
     return this.clientFor(projectId).then((client) => client.getPaper(projectId, paperId))
+  }
+
+  markPaperOpened(projectId: string, paperId: string) {
+    return this.clientFor(projectId).then((client) => client.markPaperOpened(projectId, paperId))
+  }
+
+  async paperHostPath(projectId: string, paperId: string): Promise<string> {
+    const connection = this.connection(projectId)
+    const paper = await (await this.runtimes.client(connection.runtime)).getPaper(projectId, paperId)
+    const relativePath = posix.normalize(paper.relativePath.replaceAll('\\', '/'))
+    if (
+      relativePath === '..' || relativePath.startsWith('../') || posix.isAbsolute(relativePath) ||
+      !relativePath.startsWith('papers/')
+    ) throw new Error('论文路径无效。')
+    const servicePath = connection.runtime.kind === 'local'
+      ? join(connection.path, ...relativePath.split('/'))
+      : posix.join(connection.path, relativePath)
+    return this.runtimes.toHostPath(connection.runtime, servicePath)
+  }
+
+  async exportPapers(
+    window: BrowserWindow,
+    projectId: string,
+    paperIds: string[],
+    includeImages: boolean
+  ): Promise<PaperExportResult | null> {
+    const connection = this.connection(projectId)
+    const selected = await dialog.showOpenDialog(window, {
+      title: includeImages ? '导出文本和图片' : '导出文本',
+      buttonLabel: '导出到此目录',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    const hostDestination = selected.filePaths[0]
+    if (selected.canceled || !hostDestination) return null
+    const destination = await this.runtimes.toServicePath(connection.runtime, hostDestination)
+    const client = await this.runtimes.client(connection.runtime)
+    const request = { projectId, paperIds, destination, includeImages }
+    const plan = await client.planExport(request)
+    if (plan.conflicts.length > 0) {
+      const preview = plan.conflicts.slice(0, 20).join('\n')
+      const confirmation = await dialog.showMessageBox(window, {
+        type: 'warning',
+        buttons: ['取消', '覆盖'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '确认覆盖导出文件',
+        message: `${plan.conflicts.length} 个导出文件已存在。`,
+        detail: `${preview}${plan.conflicts.length > 20 ? `\n…另有 ${plan.conflicts.length - 20} 个文件` : ''}`
+      })
+      if (confirmation.response !== 1) return null
+    }
+    return client.exportPapers({ ...request, approvedConflicts: plan.conflicts })
   }
 
   updateMetadata(request: MetadataUpdateRequest) {
@@ -201,11 +262,11 @@ export class AppController {
 
   asset(projectId: string, paperId: string, source: string): Promise<Response> {
     const connection = this.connection(projectId)
-    return this.wsl.asset(connection.distribution, projectId, paperId, source)
+    return this.runtimes.asset(connection.runtime, projectId, paperId, source)
   }
 
   async close(): Promise<void> {
-    await this.wsl.close()
+    await this.runtimes.close()
   }
 
   private connection(projectId: string): ConnectionRecord {
@@ -215,7 +276,7 @@ export class AppController {
   }
 
   private async persist(): Promise<void> {
-    const document: ConnectionDocument = { schemaVersion: 1, projects: this.connections }
+    const document: ConnectionDocument = { schemaVersion: 2, projects: this.connections }
     await atomicWriteFile(this.connectionsPath, `${JSON.stringify(document, null, 2)}\n`)
   }
 }

@@ -50,6 +50,9 @@ jobs:
         run: |
           $service = Resolve-Path 'release/win-unpacked/resources/service/litroot-service.cjs'
           if ((Get-Item $service).Length -le 0) { throw 'Packaged WSL service is empty.' }
+      - name: Verify packaged native service runtime
+        shell: pwsh
+        run: pnpm run test:packaged-service -- release/win-unpacked/LitRoot.exe release/win-unpacked/resources/service/litroot-service.cjs
       - name: Write SHA-256 checksum
         shell: pwsh
         run: |
@@ -63,6 +66,67 @@ jobs:
           path: |
             release/*-unsigned-setup.exe
             release/*-unsigned-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-package:
+    needs: checks
+    runs-on: ubuntu-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run package:linux
+      - name: Verify packaged native service runtime
+        run: pnpm run test:packaged-service -- release/linux-unpacked/litroot release/linux-unpacked/resources/service/litroot-service.cjs
+      - name: Write SHA-256 checksums
+        run: sha256sum release/*.AppImage release/*.deb > release/SHA256SUMS-linux.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: litroot-${{ github.sha }}-linux-x64
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/SHA256SUMS-linux.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-package:
+    needs: checks
+    runs-on: macos-15
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run package:mac
+      - name: Verify packaged native service runtime
+        run: pnpm run test:packaged-service -- release/mac-arm64/LitRoot.app/Contents/MacOS/LitRoot release/mac-arm64/LitRoot.app/Contents/Resources/service/litroot-service.cjs
+      - name: Write SHA-256 checksum
+        run: shasum -a 256 release/*.dmg > release/SHA256SUMS-macos.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: litroot-${{ github.sha }}-macos-arm64-unsigned
+          path: |
+            release/*.dmg
+            release/SHA256SUMS-macos.txt
           if-no-files-found: error
           retention-days: 14
 

@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-LitRoot 是一个以项目目录为事实来源、面向 paper-fetch Markdown 的本地文献管理器。首个 MVP 正式支持 Windows 11 + WSL2，界面为中文。
+LitRoot 是一个以项目目录为事实来源、面向 paper-fetch Markdown 的本地文献管理器。支持 Windows 11 x64 本机或 WSL2、Linux x64，以及 macOS 15+ Apple Silicon，界面为中文。
 
 它只做五件事：
 
@@ -16,14 +16,13 @@ LitRoot 不包含收藏、阅读状态、标签、AI 摘要/问答、Digest、Ra
 
 ## 运行架构
 
-Windows Electron 仅负责窗口、WSL 发行版选择、安全 IPC 和受限图片协议。SQLite、扫描、监听、笔记写入和 paper-fetch 任务全部由 WSL 中的 Node.js 服务执行。Electron 使用 `wsl.exe` 进入固定的 Bash 登录-shell 跳板，加载 `nvm` 和用户级 paper-fetch 环境后，以 `exec` 启动打包为单个 CJS 文件的服务；服务绑定随机 `127.0.0.1` 端口，并要求 256-bit 会话令牌。
+Electron 仅负责窗口、运行环境选择、安全 IPC 和受限图片协议。SQLite、扫描、监听、笔记写入和 paper-fetch 任务由打包为单个 CJS 文件的本地服务执行。Windows 可为每个项目选择本机或 WSL2；Linux 和 macOS 使用本机模式。本机服务通过 Electron 内置 Node 启动，WSL 模式继续通过固定 Bash 登录-shell 加载发行版内的 Node 与 paper-fetch。服务只绑定随机 `127.0.0.1` 端口，并要求 256-bit 会话令牌。
 
 前置条件（LitRoot 只诊断并显示修复命令，不会自动安装）：
 
-- Windows 11 + WSL2；
-- WSL 内 Node.js 24.15+（24.x）；
-- WSL 内可执行的官方 `paper-fetch`；
-- WSL 内 Git。
+- Windows 11 x64、Linux x64，或 macOS 15+ Apple Silicon；
+- 本机模式安装对应平台的官方 `paper-fetch`；Node.js 已由 LitRoot 内置；
+- WSL 模式需要 WSL2，并在所选发行版内安装 Node.js 24.15+（24.x）和官方 `paper-fetch`。
 
 ## 项目目录
 
@@ -69,7 +68,7 @@ LitRoot 不复制抓取逻辑。单篇使用 `paper-fetch fetch --query`，批�
 - 只扫描 `papers/` 中带 `doi`、`source`、布尔 `has_fulltext` 和合法 `content_kind` 的 Markdown；
 - 原始 HTML 经过白名单清洗，脚本、事件属性、危险 URL 和远程图片被阻止；
 - 本地图片必须是论文 Markdown 明确引用的相对路径，真实路径仍位于当前项目；
-- Windows 子进程使用参数数组且 `shell=false`；WSL 登录-shell 只执行固定的 `exec "$@"`，动态输入始终作为位置参数传递，不会拼接进 shell 命令字符串。
+- 子进程使用参数数组且 `shell=false`；WSL 登录-shell 只执行固定的 `exec "$@"`。Windows 官方 `paper-fetch.cmd` 会解析到安装器内置 Python 的模块入口，不会通过 `cmd.exe` 执行用户输入。
 
 ## 开发
 
@@ -82,12 +81,16 @@ pnpm run build
 pnpm dev
 ```
 
-Node 版本见 [.node-version](.node-version)。生成未签名 Windows 安装器：
+Node 版本见 [.node-version](.node-version)。生成各平台工程安装包：
 
 ```bash
 pnpm run package:win
+pnpm run package:linux
+pnpm run package:mac
 ```
 
-完整架构说明见 [docs/architecture.md](docs/architecture.md)，Windows + WSL2 实机验收步骤见 [docs/windows-acceptance.md](docs/windows-acceptance.md)。
+Windows 输出未签名 x64 NSIS，Linux 输出 x64 AppImage 与 deb，macOS 输出未签名、未公证的 arm64 DMG。macOS 工程包可能触发 Gatekeeper 提示，不应视为可信公共发行版。
+
+完整架构说明见 [docs/architecture.md](docs/architecture.md)，Windows 本机与 WSL2 实机验收步骤见 [docs/windows-acceptance.md](docs/windows-acceptance.md)。
 
 本仓库在 MVP 阶段保持私有；公开许可证、签名安装器和一键环境安装不在当前范围内。

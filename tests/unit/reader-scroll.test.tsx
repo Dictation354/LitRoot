@@ -19,7 +19,7 @@ const project: ProjectSummary = {
   id: PROJECT_ID,
   name: 'Scroll test project',
   path: '/home/test/scroll-project',
-  distribution: 'Ubuntu',
+  runtime: { kind: 'wsl', distribution: 'Ubuntu' },
   status: 'ready',
   error: null,
   paperCount: 2,
@@ -46,6 +46,8 @@ function paper(id: string, title: string, revision: string): PaperDetail {
     source: 'test_provider',
     contentKind: 'fulltext',
     hasFulltext: true,
+    addedAt: '2026-08-20T00:00:00.000Z',
+    lastOpenedAt: null,
     modifiedAt: '2026-08-25T00:00:00.000Z',
     searchSnippet: null,
     hasOverrides: false,
@@ -72,7 +74,7 @@ function bridgeMock(): LitRootBridge {
   const unused = async (): Promise<never> => { throw new Error('Unexpected bridge call') }
   return {
     system: {
-      listDistributions: unused,
+      listRuntimes: unused,
       diagnose: unused,
       pickProjectPath: unused,
       openExternal: async () => undefined,
@@ -92,6 +94,11 @@ function bridgeMock(): LitRootBridge {
       }),
       get: async (_projectId, paperId) => details.get(paperId) ?? null,
       updateMetadata: unused,
+      markOpened: async () => '2026-08-29T00:00:00.000Z',
+      openWindow: async () => undefined,
+      reveal: async () => undefined,
+      export: async () => null,
+      copyImage: async () => undefined,
       assetUrl: (_projectId, paperId, source) => `litroot-asset://${paperId}/${source}`
     },
     notes: {

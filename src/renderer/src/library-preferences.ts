@@ -10,6 +10,8 @@ export const LIBRARY_COLUMN_KEYS = [
   'contentKind',
   'doi',
   'source',
+  'addedAt',
+  'lastOpenedAt',
   'modifiedAt'
 ] as const
 
@@ -41,6 +43,8 @@ const COLUMN_DEFAULTS: Record<LibraryColumnKey, { visible: boolean; width: numbe
   contentKind: { visible: false, width: 108 },
   doi: { visible: false, width: 190 },
   source: { visible: false, width: 140 },
+  addedAt: { visible: true, width: 150 },
+  lastOpenedAt: { visible: true, width: 150 },
   modifiedAt: { visible: false, width: 150 }
 }
 
@@ -51,6 +55,8 @@ const SORT_FIELDS = new Set<PaperSortField>([
   'journal',
   'contentKind',
   'source',
+  'addedAt',
+  'lastOpenedAt',
   'modifiedAt'
 ])
 

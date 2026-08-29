@@ -9,7 +9,7 @@ export function isPathInside(rootPath: string, candidatePath: string): boolean {
 }
 
 export async function canonicalDirectory(path: string): Promise<string> {
-  if (!isAbsolute(path)) throw new Error('项目路径必须是 WSL 绝对路径。')
+  if (!isAbsolute(path)) throw new Error('项目路径必须是绝对路径。')
   const canonical = await realpath(resolve(path))
   if (!(await stat(canonical)).isDirectory()) throw new Error('项目路径不是目录。')
   return canonical

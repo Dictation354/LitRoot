@@ -15,13 +15,14 @@ const PROJECT_ONE = 'project_aaaaaaaaaaaaaaaaaaaaaaaa'
 const PROJECT_TWO = 'project_bbbbbbbbbbbbbbbbbbbbbbbb'
 const PAPER_ONE = 'paper_cccccccccccccccccccccccc'
 const PAPER_TWO = 'paper_dddddddddddddddddddddddd'
+const PAPER_THREE = 'paper_eeeeeeeeeeeeeeeeeeeeeeee'
 
 const projects: ProjectSummary[] = [
   {
     id: PROJECT_ONE,
     name: 'Project One',
     path: '/projects/one',
-    distribution: 'Ubuntu',
+    runtime: { kind: 'wsl', distribution: 'Ubuntu' },
     status: 'ready',
     error: null,
     paperCount: 1,
@@ -33,7 +34,7 @@ const projects: ProjectSummary[] = [
     id: PROJECT_TWO,
     name: 'Project Two',
     path: '/projects/two',
-    distribution: 'Ubuntu',
+    runtime: { kind: 'wsl', distribution: 'Ubuntu' },
     status: 'ready',
     error: null,
     paperCount: 1,
@@ -61,6 +62,8 @@ function paper(id: string, title: string, year: number): PaperDetail {
     source: 'test_provider',
     contentKind: 'fulltext',
     hasFulltext: true,
+    addedAt: '2026-08-20T00:00:00.000Z',
+    lastOpenedAt: null,
     modifiedAt: '2026-08-25T00:00:00.000Z',
     searchSnippet: null,
     hasOverrides: false,
@@ -74,7 +77,9 @@ function paper(id: string, title: string, year: number): PaperDetail {
 
 const firstPaper = paper(PAPER_ONE, 'Alpha paper', 2024)
 const secondPaper = paper(PAPER_TWO, 'Beta paper', 2025)
+const thirdPaper = paper(PAPER_THREE, 'Gamma paper', 2024)
 const requests: PaperSearchRequest[] = []
+const exports: string[][] = []
 let container: HTMLDivElement
 let root: Root
 
@@ -82,7 +87,7 @@ function bridgeMock(): LitRootBridge {
   const unused = async (): Promise<never> => { throw new Error('Unexpected bridge call') }
   return {
     system: {
-      listDistributions: unused,
+      listRuntimes: unused,
       diagnose: unused,
       pickProjectPath: unused,
       openExternal: async () => undefined,
@@ -97,15 +102,24 @@ function bridgeMock(): LitRootBridge {
     papers: {
       search: async (request) => {
         requests.push(request)
-        const item = request.projectId === PROJECT_ONE ? firstPaper : secondPaper
-        return { items: [item], total: 1, years: [item.year ?? 2025] }
+        const items = request.projectId === PROJECT_ONE ? [firstPaper, thirdPaper] : [secondPaper]
+        return { items, total: items.length, years: [items[0]?.year ?? 2025] }
       },
       get: async (projectId, paperId) => {
         if (projectId === PROJECT_ONE && paperId === PAPER_ONE) return firstPaper
+        if (projectId === PROJECT_ONE && paperId === PAPER_THREE) return thirdPaper
         if (projectId === PROJECT_TWO && paperId === PAPER_TWO) return secondPaper
         return null
       },
       updateMetadata: unused,
+      markOpened: async () => '2026-08-29T00:00:00.000Z',
+      openWindow: async () => undefined,
+      reveal: async () => undefined,
+      export: async (_projectId, paperIds) => {
+        exports.push(paperIds)
+        return { papers: paperIds.length, images: 0, files: paperIds.length, failures: [] }
+      },
+      copyImage: async () => undefined,
       assetUrl: (_projectId, paperId, source) => `litroot-asset://${paperId}/${source}`
     },
     notes: { read: unused, write: unused },
@@ -131,6 +145,8 @@ async function waitFor<T>(read: () => T | null | undefined | false): Promise<T> 
 
 beforeEach(async () => {
   requests.length = 0
+  exports.length = 0
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1480 })
   window.localStorage.clear()
   window.localStorage.setItem('litroot.current-project', PROJECT_ONE)
   window.litroot = bridgeMock()
@@ -193,5 +209,49 @@ describe('workspace tabs', () => {
     await act(async () => { titleHeader.click() })
     await waitFor(() => requests.some((request) => request.sortDirection === 'desc'))
     expect(requests.at(-1)).toMatchObject({ sortBy: 'title', sortDirection: 'desc', offset: 0 })
+  })
+
+  it('opens the project menu outside the scrolling sidebar and persists keyboard resizing', async () => {
+    const menuButton = await waitFor(() => container.querySelector<HTMLButtonElement>('.project-menu-trigger'))
+    await act(async () => { menuButton.click() })
+    const popup = document.body.querySelector<HTMLElement>('.project-menu-popup')
+    expect(popup?.parentElement?.classList.contains('project-menu-layer')).toBe(true)
+    expect(popup?.textContent).toContain('重新扫描')
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(document.body.querySelector('.project-menu-popup')).toBeNull()
+
+    const sidebarResizer = container.querySelector<HTMLElement>('.sidebar-resizer')
+    const before = Number(sidebarResizer?.getAttribute('aria-valuenow'))
+    await act(async () => {
+      sidebarResizer?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }))
+    })
+    const after = Number(sidebarResizer?.getAttribute('aria-valuenow'))
+    expect(after).toBeGreaterThan(before)
+    expect(window.localStorage.getItem('litroot.sidebar-width')).toBe(String(after))
+  })
+
+  it('selects a range with Shift and exports the complete selection from the context menu', async () => {
+    const firstRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_ONE}"]`))
+    const thirdRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_THREE}"]`))
+    await act(async () => {
+      firstRow.click()
+      thirdRow.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    })
+    expect(firstRow.getAttribute('aria-selected')).toBe('true')
+    expect(thirdRow.getAttribute('aria-selected')).toBe('true')
+    expect(thirdRow.style.gridTemplateColumns).toContain('minmax(64px')
+    expect(container.textContent).toContain('添加日期')
+    expect(container.textContent).toContain('最后打开日期')
+
+    await act(async () => {
+      firstRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 }))
+    })
+    const exportButton = [...container.querySelectorAll<HTMLButtonElement>('.paper-context-menu button')]
+      .find((button) => button.textContent?.includes('仅文本'))
+    await act(async () => { exportButton?.click() })
+    expect(exports).toEqual([[PAPER_ONE, PAPER_THREE]])
   })
 })

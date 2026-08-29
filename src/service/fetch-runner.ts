@@ -32,6 +32,7 @@ import {
 import { canonicalHttpUrl, doiFromInput, normalizeDoi, paperIdFor, sha256 } from './identity.js'
 import { errorMessage, LitRootError } from './errors.js'
 import { validatedImageFileInside } from './assets.js'
+import { normalizePaperFetchCommand, type PaperFetchCommand } from './paper-fetch-command.js'
 
 type UnknownRecord = Record<string, unknown>
 
@@ -222,15 +223,18 @@ export class PaperFetchRunner {
   private readonly watchers = new Map<string, FSWatcher>()
   private readonly tasks = new Map<string, Promise<void>>()
   private readonly executable: string
+  private readonly prefixArgs: string[]
 
   constructor(
     private readonly layout: ProjectLayout,
     private readonly database: ProjectDatabase,
     private readonly scanner: ProjectScanner,
     private readonly events: ServiceEventBus,
-    executable = process.env.PAPER_FETCH_BIN || 'paper-fetch'
+    command?: string | PaperFetchCommand
   ) {
-    this.executable = executable
+    const normalized = normalizePaperFetchCommand(command)
+    this.executable = normalized.executable
+    this.prefixArgs = normalized.prefixArgs
   }
 
   private files(runId: string): RunFiles {
@@ -534,7 +538,7 @@ export class PaperFetchRunner {
 
   private spawnProcess(run: FetchRun, args: string[]): Promise<ProcessResult> {
     return new Promise((resolveProcess, reject) => {
-      const child = spawn(this.executable, args, {
+      const child = spawn(this.executable, [...this.prefixArgs, ...args], {
         cwd: this.layout.root,
         env: process.env,
         shell: false,

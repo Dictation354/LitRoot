@@ -1,6 +1,7 @@
-import type { Dispatch, DragEvent, PointerEvent, SetStateAction } from 'react'
-import { useRef } from 'react'
+import type { Dispatch, DragEvent, MouseEvent as ReactMouseEvent, PointerEvent, SetStateAction } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PaperListItem, PaperSortField } from '../../shared/contracts'
+import { FormattedTitle } from './FormattedTitle'
 import { Icon } from './Icon'
 import type {
   LibraryColumnKey,
@@ -13,11 +14,17 @@ interface LibraryTableProps {
   loading: boolean
   query: string
   selectedPaperId: string
+  selectedPaperIds: string[]
+  selectionAnchorId: string
   preferences: LibraryPreferences
   setPreferences: Dispatch<SetStateAction<LibraryPreferences>>
   onSortChange(sortBy: PaperSortField): void
-  onSelect(paperId: string): void
+  onSelectionChange(paperIds: string[], focusedPaperId: string, anchorPaperId: string): void
   onOpen(paper: PaperListItem): void
+  onOpenWindow(paper: PaperListItem): void
+  onOpenOnline(paper: PaperListItem): void
+  onReveal(paper: PaperListItem): void
+  onExport(paperIds: string[], includeImages: boolean): void
 }
 
 const COLUMN_LABELS: Record<LibraryColumnKey, string> = {
@@ -28,6 +35,8 @@ const COLUMN_LABELS: Record<LibraryColumnKey, string> = {
   contentKind: '内容',
   doi: 'DOI',
   source: '来源',
+  addedAt: '添加日期',
+  lastOpenedAt: '最后打开日期',
   modifiedAt: '修改时间'
 }
 
@@ -38,8 +47,12 @@ const SORTABLE_COLUMNS = new Set<PaperSortField>([
   'journal',
   'contentKind',
   'source',
+  'addedAt',
+  'lastOpenedAt',
   'modifiedAt'
 ])
+
+const FLEXIBLE_COLUMNS = new Set<LibraryColumnKey>(['title', 'authors', 'journal', 'doi', 'source'])
 
 function contentLabel(paper: PaperListItem): string {
   if (paper.contentKind === 'fulltext') return '全文'
@@ -47,12 +60,24 @@ function contentLabel(paper: PaperListItem): string {
   return '仅元数据'
 }
 
+function dateLabel(value: string | null): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleString()
+}
+
+export function libraryAuthorLine(authors: string[]): string {
+  if (authors.length === 0) return '—'
+  if (authors.length >= 3) return `${authors[0]} et al.`
+  return authors.join('; ')
+}
+
 function cellValue(paper: PaperListItem, key: LibraryColumnKey): React.ReactNode {
   if (key === 'title') {
     return (
       <>
         <span className="paper-title-cell">
-          {paper.title || '无标题'}
+          <FormattedTitle>{paper.title || '无标题'}</FormattedTitle>
           {paper.hasOverrides && <span className="override-dot" title="包含本地元数据修改" />}
         </span>
         {paper.searchSnippet && (
@@ -63,7 +88,7 @@ function cellValue(paper: PaperListItem, key: LibraryColumnKey): React.ReactNode
       </>
     )
   }
-  if (key === 'authors') return paper.authors.join('; ') || '—'
+  if (key === 'authors') return libraryAuthorLine(paper.authors)
   if (key === 'year') return paper.year ?? '—'
   if (key === 'journal') return paper.journal || '—'
   if (key === 'contentKind') {
@@ -71,8 +96,9 @@ function cellValue(paper: PaperListItem, key: LibraryColumnKey): React.ReactNode
   }
   if (key === 'doi') return paper.doi || '—'
   if (key === 'source') return paper.source || '—'
-  const date = new Date(paper.modifiedAt)
-  return Number.isNaN(date.valueOf()) ? paper.modifiedAt || '—' : date.toLocaleDateString()
+  if (key === 'addedAt') return dateLabel(paper.addedAt)
+  if (key === 'lastOpenedAt') return dateLabel(paper.lastOpenedAt)
+  return dateLabel(paper.modifiedAt)
 }
 
 function resizeColumn(
@@ -106,16 +132,88 @@ export function LibraryTable({
   loading,
   query,
   selectedPaperId,
+  selectedPaperIds,
+  selectionAnchorId,
   preferences,
   setPreferences,
   onSortChange,
-  onSelect,
-  onOpen
+  onSelectionChange,
+  onOpen,
+  onOpenWindow,
+  onOpenOnline,
+  onReveal,
+  onExport
 }: LibraryTableProps) {
   const draggedColumn = useRef<LibraryColumnKey | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; paper: PaperListItem } | null>(null)
   const visibleColumns = preferences.columns.filter((column) => column.visible)
-  const gridTemplateColumns = visibleColumns.map((column) => `${column.width}px`).join(' ')
-  const minWidth = visibleColumns.reduce((sum, column) => sum + column.width, 0)
+  const gridTemplateColumns = visibleColumns.map((column) => (
+    FLEXIBLE_COLUMNS.has(column.key) ? `minmax(64px, ${column.width}fr)` : `${column.width}px`
+  )).join(' ')
+  const minWidth = visibleColumns.reduce(
+    (sum, column) => sum + (FLEXIBLE_COLUMNS.has(column.key) ? 64 : column.width),
+    0
+  )
+  const selected = new Set(selectedPaperIds)
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setContextMenu(null)
+    }
+    const dismiss = (): void => setContextMenu(null)
+    window.addEventListener('keydown', close)
+    window.addEventListener('resize', dismiss)
+    window.addEventListener('scroll', dismiss, true)
+    return () => {
+      window.removeEventListener('keydown', close)
+      window.removeEventListener('resize', dismiss)
+      window.removeEventListener('scroll', dismiss, true)
+    }
+  }, [contextMenu])
+
+  const selectRange = (paperId: string): string[] => {
+    const anchorIndex = items.findIndex((paper) => paper.id === selectionAnchorId)
+    const targetIndex = items.findIndex((paper) => paper.id === paperId)
+    if (anchorIndex < 0 || targetIndex < 0) return [paperId]
+    const start = Math.min(anchorIndex, targetIndex)
+    const end = Math.max(anchorIndex, targetIndex)
+    return items.slice(start, end + 1).map((paper) => paper.id)
+  }
+
+  const selectPaper = (
+    paperId: string,
+    modifiers: { shiftKey: boolean; toggleKey: boolean }
+  ): void => {
+    if (modifiers.shiftKey) {
+      onSelectionChange(selectRange(paperId), paperId, selectionAnchorId || paperId)
+      return
+    }
+    if (modifiers.toggleKey) {
+      const next = selected.has(paperId)
+        ? selectedPaperIds.filter((id) => id !== paperId)
+        : [...selectedPaperIds, paperId]
+      onSelectionChange(next, paperId, paperId)
+      return
+    }
+    onSelectionChange([paperId], paperId, paperId)
+  }
+
+  const openContextMenu = (event: ReactMouseEvent, paper: PaperListItem): void => {
+    event.preventDefault()
+    if (!selected.has(paper.id)) onSelectionChange([paper.id], paper.id, paper.id)
+    else onSelectionChange(selectedPaperIds, paper.id, selectionAnchorId || paper.id)
+    setContextMenu({
+      x: Math.min(event.clientX, Math.max(8, window.innerWidth - 224)),
+      y: Math.min(event.clientY, Math.max(8, window.innerHeight - 250)),
+      paper
+    })
+  }
+
+  const contextAction = (action: () => void): void => {
+    setContextMenu(null)
+    action()
+  }
 
   const dropColumn = (event: DragEvent, target: LibraryColumnKey): void => {
     event.preventDefault()
@@ -185,14 +283,23 @@ export function LibraryTable({
           <div className="table-body" role="rowgroup">
             {items.map((paper) => (
               <div
-                aria-selected={paper.id === selectedPaperId}
-                className={`paper-row ${paper.id === selectedPaperId ? 'selected' : ''}`}
+                aria-selected={selected.has(paper.id)}
+                className={`paper-row ${selected.has(paper.id) ? 'selected' : ''}`}
                 data-paper-id={paper.id}
                 key={paper.id}
-                onClick={() => onSelect(paper.id)}
+                onClick={(event) => selectPaper(paper.id, {
+                  shiftKey: event.shiftKey,
+                  toggleKey: event.ctrlKey || event.metaKey
+                })}
+                onContextMenu={(event) => openContextMenu(event, paper)}
                 onDoubleClick={() => onOpen(paper)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') onOpen(paper)
+                  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+                    event.preventDefault()
+                    onSelectionChange(items.map((item) => item.id), paper.id, items[0]?.id ?? paper.id)
+                    return
+                  }
                   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
                   event.preventDefault()
                   const rows = Array.from(
@@ -202,7 +309,8 @@ export function LibraryTable({
                   const delta = event.key === 'ArrowDown' ? 1 : -1
                   const next = rows[Math.min(rows.length - 1, Math.max(0, current + delta))]
                   if (next) {
-                    onSelect(next.dataset.paperId ?? '')
+                    const nextId = next.dataset.paperId ?? ''
+                    selectPaper(nextId, { shiftKey: event.shiftKey, toggleKey: false })
                     next.focus()
                   }
                 }}
@@ -238,6 +346,33 @@ export function LibraryTable({
           <small>拖动表头排序，拖动分隔线调整宽度。</small>
         </div>
       </details>
+      {contextMenu && (
+        <div
+          className="paper-context-layer"
+          onPointerDown={(event) => {
+            if (event.currentTarget === event.target) setContextMenu(null)
+          }}
+        >
+          <div
+            className="paper-context-menu"
+            role="menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button type="button" role="menuitem" onClick={() => contextAction(() => onOpen(contextMenu.paper))}>打开到新标签页</button>
+            <button type="button" role="menuitem" onClick={() => contextAction(() => onOpenWindow(contextMenu.paper))}>打开到新窗口</button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!contextMenu.paper.url && !contextMenu.paper.doi}
+              onClick={() => contextAction(() => onOpenOnline(contextMenu.paper))}
+            >在线查看</button>
+            <button type="button" role="menuitem" onClick={() => contextAction(() => onReveal(contextMenu.paper))}>打开文件目录</button>
+            <span className="paper-context-separator" role="separator" />
+            <button type="button" role="menuitem" onClick={() => contextAction(() => onExport(selectedPaperIds.length > 0 ? selectedPaperIds : [contextMenu.paper.id], false))}>导出文件（仅文本）</button>
+            <button type="button" role="menuitem" onClick={() => contextAction(() => onExport(selectedPaperIds.length > 0 ? selectedPaperIds : [contextMenu.paper.id], true))}>导出文件（文本 + 图片）</button>
+          </div>
+        </div>
+      )}
       {!loading && items.length === 0 && (
         <div className="table-empty">
           <Icon name={query ? 'search' : 'book'} size={30} />

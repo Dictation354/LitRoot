@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-LitRoot is a project-scoped, local literature manager for Markdown produced by paper-fetch. The first MVP officially targets Windows 11 with WSL2 and ships a Chinese user interface.
+LitRoot is a project-scoped, local literature manager for Markdown produced by paper-fetch. It supports native Windows 11 x64 or WSL2, Linux x64, and macOS 15+ on Apple Silicon, and ships a Chinese user interface.
 
 It deliberately provides only five capabilities:
 
@@ -16,14 +16,13 @@ Favorites, reading status, tags, AI summaries/Q&A, Digest, Radar, PDF annotation
 
 ## Runtime architecture
 
-The Windows Electron process owns only the desktop window, WSL distribution selection, narrow IPC, and a restricted image protocol. A Node.js service inside WSL owns SQLite, scanning, file watching, note writes, and paper-fetch jobs. Electron enters a fixed Bash login-shell trampoline through `wsl.exe`, loads the user's `nvm` and paper-fetch environment, and then replaces the shell with the bundled CJS service via `exec`. The service listens on a random `127.0.0.1` port and requires a 256-bit session token on every request.
+Electron owns only the desktop windows, runtime selection, narrow IPC, and a restricted image protocol. A bundled single-file service owns SQLite, scanning, file watching, note writes, and paper-fetch jobs. Native mode runs it with Electron's bundled Node; WSL mode retains the fixed Bash login-shell trampoline and uses Node and paper-fetch inside the selected distribution. The service listens on a random `127.0.0.1` port and requires a 256-bit session token on every request.
 
 Prerequisites are diagnosed but never installed automatically:
 
-- Windows 11 with WSL2;
-- Node.js 24.15+ (24.x) inside WSL;
-- an executable official `paper-fetch` inside WSL;
-- Git inside WSL.
+- Windows 11 x64, Linux x64, or macOS 15+ on Apple Silicon;
+- the official platform build of `paper-fetch` for native mode; Node.js is bundled with LitRoot;
+- WSL2 plus Node.js 24.15+ (24.x) and official `paper-fetch` inside the selected distribution for WSL mode.
 
 ## Project layout
 
@@ -69,7 +68,7 @@ New results first land in `.litroot/tmp/`. Identity, trusted front matter, conte
 - Only trusted Markdown under `papers/` is indexed.
 - HTML is allowlist-sanitized; scripts, event attributes, dangerous URLs, and automatic remote images are blocked.
 - Local images must be explicitly referenced relative assets whose real path stays inside the active project.
-- Windows child processes use argument arrays with `shell=false`; the WSL login shell runs only the fixed `exec "$@"` program, with every dynamic value passed as a positional argument instead of shell source text.
+- Child processes use argument arrays with `shell=false`; the WSL login shell runs only the fixed `exec "$@"` program. The official Windows `paper-fetch.cmd` is resolved to its bundled Python module entry instead of sending user input through `cmd.exe`.
 
 ## Development
 
@@ -82,6 +81,6 @@ pnpm run build
 pnpm dev
 ```
 
-Build an unsigned Windows installer with `pnpm run package:win`. See [docs/architecture.md](docs/architecture.md) for internals and [docs/windows-acceptance.md](docs/windows-acceptance.md) for the physical Windows + WSL2 acceptance checklist.
+Build engineering artifacts with `pnpm run package:win`, `pnpm run package:linux`, or `pnpm run package:mac`. Outputs are an unsigned Windows x64 NSIS installer, Linux x64 AppImage and deb packages, and an unsigned/unnotarized macOS 15+ arm64 DMG. See [docs/architecture.md](docs/architecture.md) for internals and [docs/windows-acceptance.md](docs/windows-acceptance.md) for native Windows and WSL2 acceptance.
 
 The MVP repository may remain private. Public licensing, signed installers, and one-click environment provisioning are not part of this iteration.

@@ -27,6 +27,7 @@ export interface IndexedPaperInput {
   rawMarkdown: string
   parsed: ParsedPaperMarkdown
   overrides: MetadataOverrides
+  addedAt: string | null
   modifiedAt: string
 }
 
@@ -57,6 +58,8 @@ const SCHEMA = `
     content_kind TEXT NOT NULL,
     has_fulltext INTEGER NOT NULL,
     asset_sources_json TEXT NOT NULL,
+    added_at TEXT,
+    last_opened_at TEXT,
     modified_at TEXT NOT NULL,
     indexed_at TEXT NOT NULL
   );
@@ -131,6 +134,8 @@ function listItem(row: Row): PaperListItem {
     source: asString(row.source),
     contentKind: contentKind(row.content_kind),
     hasFulltext: asNumber(row.has_fulltext) === 1,
+    addedAt: asString(row.added_at) || null,
+    lastOpenedAt: asString(row.last_opened_at) || null,
     modifiedAt: asString(row.modified_at),
     searchSnippet: typeof row.search_snippet === 'string' ? row.search_snippet : null,
     hasOverrides: Object.keys(json<MetadataOverrides>(row.overrides_json, {})).length > 0
@@ -144,6 +149,8 @@ const SORT_EXPRESSIONS: Record<PaperSortField, string> = {
   journal: 'nullif(p.journal, \'\') COLLATE NOCASE',
   contentKind: 'nullif(p.content_kind, \'\') COLLATE NOCASE',
   source: 'nullif(p.source, \'\') COLLATE NOCASE',
+  addedAt: 'nullif(p.added_at, \'\')',
+  lastOpenedAt: 'nullif(p.last_opened_at, \'\')',
   modifiedAt: 'nullif(p.modified_at, \'\')'
 }
 
@@ -163,8 +170,15 @@ export class ProjectDatabase {
     const version = asNumber((this.database.prepare('PRAGMA user_version').get() as Row).user_version)
     if (version === 0) {
       this.database.exec(SCHEMA)
-      this.database.exec('PRAGMA user_version = 1')
-    } else if (version !== 1) {
+      this.database.exec('PRAGMA user_version = 2')
+    } else if (version === 1) {
+      this.database.exec(`
+        ALTER TABLE papers ADD COLUMN added_at TEXT;
+        ALTER TABLE papers ADD COLUMN last_opened_at TEXT;
+        PRAGMA user_version = 2;
+      `)
+      this.database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
+    } else if (version !== 2) {
       throw new Error(`LitRoot 索引版本 ${version} 高于当前支持的版本。请删除可重建的 cache。`)
     } else {
       this.database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
@@ -211,8 +225,8 @@ export class ProjectDatabase {
           id, relative_path, file_path, fingerprint, raw_markdown, body_markdown, body_text,
           fetched_metadata_json, overrides_json, title, authors_json, journal, year, doi, url,
           abstract, keywords_json, source, content_kind, has_fulltext, asset_sources_json,
-          modified_at, indexed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          added_at, modified_at, indexed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           relative_path = excluded.relative_path,
           file_path = excluded.file_path,
@@ -234,6 +248,7 @@ export class ProjectDatabase {
           content_kind = excluded.content_kind,
           has_fulltext = excluded.has_fulltext,
           asset_sources_json = excluded.asset_sources_json,
+          added_at = excluded.added_at,
           modified_at = excluded.modified_at,
           indexed_at = excluded.indexed_at
       `).run(
@@ -258,6 +273,7 @@ export class ProjectDatabase {
         input.parsed.contentKind,
         input.parsed.hasFulltext ? 1 : 0,
         JSON.stringify(input.parsed.assetSources),
+        input.addedAt,
         input.modifiedAt,
         now()
       )
@@ -355,6 +371,11 @@ export class ProjectDatabase {
       markdownRevision: sha256(asString(row.raw_markdown)),
       assetPaths: json<string[]>(row.asset_sources_json, [])
     }
+  }
+
+  markOpened(paperId: string, at = now()): string | null {
+    const result = this.database.prepare('UPDATE papers SET last_opened_at = ? WHERE id = ?').run(at, paperId)
+    return asNumber(result.changes) === 1 ? at : null
   }
 
   updateOverrides(paperId: string, overrides: MetadataOverrides): PaperDetail | null {

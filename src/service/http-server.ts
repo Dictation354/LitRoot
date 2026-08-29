@@ -6,6 +6,8 @@ import {
   metadataUpdateRequestSchema,
   noteReadRequestSchema,
   noteWriteRequestSchema,
+  paperExportExecuteRequestSchema,
+  paperExportRequestSchema,
   paperSearchRequestSchema
 } from '../shared/contracts.js'
 import type { ServiceEvent } from '../shared/contracts.js'
@@ -120,7 +122,7 @@ export class LitRootHttpServer {
     if (!tokenMatches(request.headers.authorization, this.token)) {
       throw new LitRootError('unauthorized', '缺少有效的会话令牌。', 401)
     }
-    if (request.headers.origin) throw new LitRootError('browser_origin_denied', '浏览器来源不能直接访问 WSL 服务。', 403)
+    if (request.headers.origin) throw new LitRootError('browser_origin_denied', '浏览器来源不能直接访问 LitRoot 服务。', 403)
 
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     const segments = parseSegments(url.pathname)
@@ -135,7 +137,7 @@ export class LitRootHttpServer {
       return
     }
     if (method === 'GET' && path[0] === 'diagnostics' && path.length === 1) {
-      sendJson(response, 200, await diagnoseEnvironment('WSL'))
+      sendJson(response, 200, await diagnoseEnvironment())
       return
     }
     if (method === 'GET' && path[0] === 'events' && path.length === 1) {
@@ -189,6 +191,10 @@ export class LitRootHttpServer {
         sendJson(response, 200, await project.updateMetadata(body))
         return
       }
+      if (method === 'POST' && path[4] === 'opened' && path.length === 5) {
+        sendJson(response, 200, { openedAt: project.markPaperOpened(selectedPaperId) })
+        return
+      }
       if (method === 'GET' && path[4] === 'assets' && path.length === 5) {
         const source = url.searchParams.get('source')
         if (!source || source.length > 8_000) throw new LitRootError('invalid_asset', '资产路径无效。')
@@ -201,6 +207,22 @@ export class LitRootHttpServer {
         response.end(asset.data)
         return
       }
+    }
+    if (method === 'POST' && path[2] === 'export' && path[3] === 'plan' && path.length === 4) {
+      const body = paperExportRequestSchema.parse({
+        ...await readJson(request) as object,
+        projectId: selectedProjectId
+      })
+      sendJson(response, 200, await project.planExport(body))
+      return
+    }
+    if (method === 'POST' && path[2] === 'export' && path[3] === 'execute' && path.length === 4) {
+      const body = paperExportExecuteRequestSchema.parse({
+        ...await readJson(request) as object,
+        projectId: selectedProjectId
+      })
+      sendJson(response, 200, await project.exportPapers(body))
+      return
     }
     if (method === 'POST' && path[2] === 'notes' && path[3] === 'read') {
       const body = noteReadRequestSchema.parse({ ...await readJson(request) as object, projectId: selectedProjectId })

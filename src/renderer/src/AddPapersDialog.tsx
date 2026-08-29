@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FetchRun, ProjectSummary, ServiceEvent } from '../../shared/contracts'
 import { parseBatchInput } from '../../shared/batch-input'
 import { bridge, errorMessage } from './bridge'
+import { FormattedTitle } from './FormattedTitle'
 
 interface AddPapersDialogProps {
   open: boolean
@@ -150,7 +151,9 @@ export function AddPapersDialog({
                     <li key={item.index} className={`fetch-item ${item.state}`}>
                       <div className="fetch-item-title">
                         <span className="index">{item.index}</span>
-                        <strong>{item.title ?? item.query}</strong>
+                        <strong>
+                          {item.title ? <FormattedTitle>{item.title}</FormattedTitle> : item.query}
+                        </strong>
                         <span className="item-state">{stateLabel[item.state]}</span>
                       </div>
                       <div className="fetch-meta">
@@ -175,7 +178,7 @@ export function AddPapersDialog({
                             key={`${candidate.doi}-${candidate.url}`}
                             onClick={() => void create(candidate.doi ?? candidate.url ?? candidate.title)}
                           >
-                            选择：{candidate.title}
+                            选择：<FormattedTitle>{candidate.title}</FormattedTitle>
                           </button>
                         ))}
                       </div>

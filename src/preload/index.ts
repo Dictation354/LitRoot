@@ -5,15 +5,15 @@ import { paperAssetUrl } from './asset-url.js'
 
 const bridge: LitRootBridge = {
   system: {
-    listDistributions: () => ipcRenderer.invoke(IPC.systemListDistributions),
-    diagnose: (distribution) => ipcRenderer.invoke(IPC.systemDiagnose, distribution),
-    pickProjectPath: (distribution) => ipcRenderer.invoke(IPC.systemPickProjectPath, distribution),
+    listRuntimes: () => ipcRenderer.invoke(IPC.systemListRuntimes),
+    diagnose: (target) => ipcRenderer.invoke(IPC.systemDiagnose, target),
+    pickProjectPath: (target) => ipcRenderer.invoke(IPC.systemPickProjectPath, target),
     openExternal: (url) => ipcRenderer.invoke(IPC.systemOpenExternal, url),
     copyText: (text) => ipcRenderer.invoke(IPC.systemCopyText, text)
   },
   projects: {
     list: () => ipcRenderer.invoke(IPC.projectsList),
-    add: (distribution, path, name) => ipcRenderer.invoke(IPC.projectsAdd, distribution, path, name),
+    add: (target, path, name) => ipcRenderer.invoke(IPC.projectsAdd, target, path, name),
     remove: (projectId) => ipcRenderer.invoke(IPC.projectsRemove, projectId),
     scan: (projectId) => ipcRenderer.invoke(IPC.projectsScan, projectId)
   },
@@ -21,6 +21,13 @@ const bridge: LitRootBridge = {
     search: (request) => ipcRenderer.invoke(IPC.papersSearch, request),
     get: (projectId, paperId) => ipcRenderer.invoke(IPC.papersGet, projectId, paperId),
     updateMetadata: (request) => ipcRenderer.invoke(IPC.papersUpdateMetadata, request),
+    markOpened: (projectId, paperId) => ipcRenderer.invoke(IPC.papersMarkOpened, projectId, paperId),
+    openWindow: (projectId, paperId) => ipcRenderer.invoke(IPC.papersOpenWindow, projectId, paperId),
+    reveal: (projectId, paperId) => ipcRenderer.invoke(IPC.papersReveal, projectId, paperId),
+    export: (projectId, paperIds, includeImages) =>
+      ipcRenderer.invoke(IPC.papersExport, projectId, paperIds, includeImages),
+    copyImage: (projectId, paperId, source) =>
+      ipcRenderer.invoke(IPC.papersCopyImage, projectId, paperId, source),
     assetUrl: paperAssetUrl
   },
   notes: {

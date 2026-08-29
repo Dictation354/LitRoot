@@ -53,12 +53,32 @@ export const metadataOverridesSchema = z.object({
 })
 export type MetadataOverrides = z.infer<typeof metadataOverridesSchema>
 
+export const runtimeTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('local') }),
+  z.object({
+    kind: z.literal('wsl'),
+    distribution: z.string().trim().min(1).max(200).refine((value) => !/[\0\r\n]/.test(value))
+  })
+])
+export type RuntimeTarget = z.infer<typeof runtimeTargetSchema>
+
+export const runtimeOptionSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  target: runtimeTargetSchema
+})
+export type RuntimeOption = z.infer<typeof runtimeOptionSchema>
+
+export function runtimeTargetKey(target: RuntimeTarget): string {
+  return target.kind === 'local' ? 'local' : `wsl:${target.distribution}`
+}
+
 export const projectStatusSchema = z.enum(['connecting', 'scanning', 'ready', 'empty', 'error'])
 export const projectSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
   path: z.string(),
-  distribution: z.string().optional(),
+  runtime: runtimeTargetSchema.optional(),
   status: projectStatusSchema,
   error: z.string().nullable(),
   paperCount: z.number().int().nonnegative(),
@@ -94,6 +114,8 @@ export const paperListItemSchema = z.object({
   source: z.string(),
   contentKind: contentKindSchema,
   hasFulltext: z.boolean(),
+  addedAt: z.string().nullable(),
+  lastOpenedAt: z.string().nullable(),
   modifiedAt: z.string(),
   searchSnippet: z.string().nullable(),
   hasOverrides: z.boolean()
@@ -116,6 +138,8 @@ export const paperSortFieldSchema = z.enum([
   'journal',
   'contentKind',
   'source',
+  'addedAt',
+  'lastOpenedAt',
   'modifiedAt'
 ])
 export type PaperSortField = z.infer<typeof paperSortFieldSchema>
@@ -140,6 +164,33 @@ export const paperSearchResultSchema = z.object({
   years: z.array(z.number().int())
 })
 export type PaperSearchResult = z.infer<typeof paperSearchResultSchema>
+
+export const paperExportRequestSchema = z.object({
+  projectId: z.string(),
+  paperIds: z.array(z.string()).min(1).max(50),
+  destination: z.string().min(1).max(8_000),
+  includeImages: z.boolean()
+})
+export type PaperExportRequest = z.infer<typeof paperExportRequestSchema>
+
+export const paperExportPlanSchema = z.object({
+  files: z.array(z.string()),
+  conflicts: z.array(z.string())
+})
+export type PaperExportPlan = z.infer<typeof paperExportPlanSchema>
+
+export const paperExportExecuteRequestSchema = paperExportRequestSchema.extend({
+  approvedConflicts: z.array(z.string()).max(10_000)
+})
+export type PaperExportExecuteRequest = z.infer<typeof paperExportExecuteRequestSchema>
+
+export const paperExportResultSchema = z.object({
+  papers: z.number().int().nonnegative(),
+  images: z.number().int().nonnegative(),
+  files: z.number().int().nonnegative(),
+  failures: z.array(z.object({ relativePath: z.string(), message: z.string() }))
+})
+export type PaperExportResult = z.infer<typeof paperExportResultSchema>
 
 export const metadataUpdateRequestSchema = z.object({
   projectId: z.string(),
@@ -258,7 +309,7 @@ export const createFetchRunRequestSchema = z.object({
 export type CreateFetchRunRequest = z.input<typeof createFetchRunRequestSchema>
 
 export const dependencyCheckSchema = z.object({
-  name: z.enum(['node', 'paper-fetch', 'git']),
+  name: z.enum(['node', 'paper-fetch']),
   ok: z.boolean(),
   version: z.string().nullable(),
   required: z.string(),
@@ -267,7 +318,7 @@ export const dependencyCheckSchema = z.object({
 })
 
 export const dependencyReportSchema = z.object({
-  distribution: z.string(),
+  runtimeLabel: z.string(),
   ready: z.boolean(),
   checks: z.array(dependencyCheckSchema)
 })
@@ -310,15 +361,15 @@ export type ApiErrorBody = z.infer<typeof apiErrorSchema>
 
 export interface LitRootBridge {
   system: {
-    listDistributions(): Promise<string[]>
-    diagnose(distribution: string): Promise<DependencyReport>
-    pickProjectPath(distribution: string): Promise<string | null>
+    listRuntimes(): Promise<RuntimeOption[]>
+    diagnose(target: RuntimeTarget): Promise<DependencyReport>
+    pickProjectPath(target: RuntimeTarget): Promise<string | null>
     openExternal(url: string): Promise<void>
     copyText(text: string): Promise<void>
   }
   projects: {
     list(): Promise<ProjectSummary[]>
-    add(distribution: string, path: string, name?: string): Promise<ProjectSummary>
+    add(target: RuntimeTarget, path: string, name?: string): Promise<ProjectSummary>
     remove(projectId: string): Promise<void>
     scan(projectId: string): Promise<ScanResult>
   }
@@ -326,6 +377,11 @@ export interface LitRootBridge {
     search(request: PaperSearchRequest): Promise<PaperSearchResult>
     get(projectId: string, paperId: string): Promise<PaperDetail | null>
     updateMetadata(request: MetadataUpdateRequest): Promise<PaperDetail>
+    markOpened(projectId: string, paperId: string): Promise<string>
+    openWindow(projectId: string, paperId: string): Promise<void>
+    reveal(projectId: string, paperId: string): Promise<void>
+    export(projectId: string, paperIds: string[], includeImages: boolean): Promise<PaperExportResult | null>
+    copyImage(projectId: string, paperId: string, source: string): Promise<void>
     assetUrl(projectId: string, paperId: string, source: string): string
   }
   notes: {
@@ -345,7 +401,7 @@ export interface LitRootBridge {
 }
 
 export const IPC = {
-  systemListDistributions: 'litroot:system:list-distributions',
+  systemListRuntimes: 'litroot:system:list-runtimes',
   systemDiagnose: 'litroot:system:diagnose',
   systemPickProjectPath: 'litroot:system:pick-project-path',
   systemOpenExternal: 'litroot:system:open-external',
@@ -357,6 +413,11 @@ export const IPC = {
   papersSearch: 'litroot:papers:search',
   papersGet: 'litroot:papers:get',
   papersUpdateMetadata: 'litroot:papers:update-metadata',
+  papersMarkOpened: 'litroot:papers:mark-opened',
+  papersOpenWindow: 'litroot:papers:open-window',
+  papersReveal: 'litroot:papers:reveal',
+  papersExport: 'litroot:papers:export',
+  papersCopyImage: 'litroot:papers:copy-image',
   notesRead: 'litroot:notes:read',
   notesWrite: 'litroot:notes:write',
   fetchCreate: 'litroot:fetch:create',

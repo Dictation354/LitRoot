@@ -1,4 +1,5 @@
 import type { PaperDetail, ProjectSummary, ServiceEvent } from '../../shared/contracts'
+import { FormattedTitle } from './FormattedTitle'
 import { MetadataEditor } from './MetadataEditor'
 import { NoteEditor } from './NoteEditor'
 
@@ -29,7 +30,9 @@ export function WorkspaceInspector({
     <aside className="inspector-panel">
       <header className="inspector-heading">
         <span>{paper ? '当前文献' : '当前项目'}</span>
-        <strong title={paper?.title ?? project.name}>{paper?.title ?? project.name}</strong>
+        <strong title={paper?.title ?? project.name}>
+          {paper ? <FormattedTitle>{paper.title}</FormattedTitle> : project.name}
+        </strong>
       </header>
       <nav className="inspector-tabs" aria-label="详情栏">
         <button

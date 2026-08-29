@@ -5,7 +5,7 @@ import { ProjectRegistry } from './project-registry.js'
 
 async function main(): Promise<void> {
   if (process.argv.includes('--diagnose')) {
-    process.stdout.write(`${JSON.stringify(await diagnoseEnvironment('WSL'))}\n`)
+    process.stdout.write(`${JSON.stringify(await diagnoseEnvironment())}\n`)
     return
   }
 

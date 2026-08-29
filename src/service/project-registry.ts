@@ -14,6 +14,7 @@ import { initializeProject } from './project-layout.js'
 import { LitRootProject } from './project.js'
 import { ServiceEventBus } from './events.js'
 import { LitRootError } from './errors.js'
+import { paperFetchCommandFromEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
 
 interface RegistryRecord {
   id: string
@@ -60,7 +61,7 @@ export class ProjectRegistry {
 
   constructor(
     registryPath = process.env.LITROOT_REGISTRY_PATH || defaultRegistryPath(),
-    private readonly paperFetchExecutable = process.env.PAPER_FETCH_BIN
+    private readonly paperFetchCommand: string | PaperFetchCommand = paperFetchCommandFromEnvironment()
   ) {
     this.registryPath = registryPath
   }
@@ -76,11 +77,11 @@ export class ProjectRegistry {
       try {
         const layout = await initializeProject(record.path)
         if (layout.id !== record.id || this.projects.has(layout.id)) continue
-        const project = new LitRootProject(layout, this.events, this.paperFetchExecutable)
+        const project = new LitRootProject(layout, this.events, this.paperFetchCommand)
         this.projects.set(layout.id, project)
         void project.start().catch(() => undefined)
       } catch {
-        // One unavailable registration must not prevent other WSL projects from opening.
+        // One unavailable registration must not prevent other projects from opening.
       }
     }
   }
@@ -98,7 +99,7 @@ export class ProjectRegistry {
     if ([...this.projects.values()].some((project) => project.layout.root === layout.root)) {
       throw new LitRootError('project_already_registered', '该项目已经注册。', 409)
     }
-    const project = new LitRootProject(layout, this.events, this.paperFetchExecutable)
+    const project = new LitRootProject(layout, this.events, this.paperFetchCommand)
     this.projects.set(layout.id, project)
     try {
       await project.start()
@@ -121,7 +122,7 @@ export class ProjectRegistry {
 
   require(projectId: string): LitRootProject {
     const project = this.projects.get(projectId)
-    if (!project) throw new LitRootError('project_not_found', '项目未注册或不属于当前 WSL 服务。', 404)
+    if (!project) throw new LitRootError('project_not_found', '项目未注册或不属于当前运行环境。', 404)
     return project
   }
 

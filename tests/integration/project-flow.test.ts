@@ -135,4 +135,70 @@ describe('project lifecycle', () => {
     await expect(project.readAsset(paper.id, 'assets/escape.png')).resolves.toBeNull()
     await project.close()
   })
+
+  it('exports original Markdown with optional validated images and confirms conflicts', async () => {
+    const { sandbox, projectPath, project } = await fixture()
+    await mkdir(join(projectPath, 'papers', 'assets'), { recursive: true })
+    await writeFile(
+      join(projectPath, 'papers', 'assets', 'figure.png'),
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    )
+    const raw = paperMarkdown({ body: '![Figure](assets/figure.png)' })
+    await writePaper(projectPath, 'paper.md', raw)
+    await project.start()
+    const paper = project.search({ projectId: project.layout.id }).items[0]
+    if (!paper) throw new Error('Expected scanned paper.')
+
+    const textDestination = join(sandbox, 'text-export')
+    await mkdir(textDestination)
+    const textPlan = await project.planExport({
+      projectId: project.layout.id,
+      paperIds: [paper.id],
+      destination: textDestination,
+      includeImages: false
+    })
+    expect(textPlan).toEqual({ files: ['papers/paper.md'], conflicts: [] })
+    const textResult = await project.exportPapers({
+      projectId: project.layout.id,
+      paperIds: [paper.id],
+      destination: textDestination,
+      includeImages: false,
+      approvedConflicts: []
+    })
+    expect(textResult).toMatchObject({ papers: 1, images: 0, failures: [] })
+    await expect(readFile(join(textDestination, 'papers', 'paper.md'), 'utf8')).resolves.toBe(raw)
+
+    const imageDestination = join(sandbox, 'image-export')
+    await mkdir(imageDestination)
+    const imageResult = await project.exportPapers({
+      projectId: project.layout.id,
+      paperIds: [paper.id],
+      destination: imageDestination,
+      includeImages: true,
+      approvedConflicts: []
+    })
+    expect(imageResult).toMatchObject({ papers: 1, images: 1, failures: [] })
+    await expect(readFile(join(imageDestination, 'papers', 'assets', 'figure.png'))).resolves.toHaveLength(8)
+    await expect(project.planExport({
+      projectId: project.layout.id,
+      paperIds: [paper.id],
+      destination: imageDestination,
+      includeImages: true
+    })).resolves.toMatchObject({
+      conflicts: ['papers/assets/figure.png', 'papers/paper.md']
+    })
+
+    const unsafeDestination = join(sandbox, 'unsafe-export')
+    const outside = join(sandbox, 'outside-export')
+    await mkdir(unsafeDestination)
+    await mkdir(outside)
+    await symlink(outside, join(unsafeDestination, 'papers'))
+    await expect(project.planExport({
+      projectId: project.layout.id,
+      paperIds: [paper.id],
+      destination: unsafeDestination,
+      includeImages: false
+    })).rejects.toMatchObject({ code: 'unsafe_export_target' })
+    await project.close()
+  })
 })

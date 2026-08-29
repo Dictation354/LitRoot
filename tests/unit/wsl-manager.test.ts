@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const spawnMock = vi.hoisted(() => vi.fn())
@@ -7,7 +10,8 @@ const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
-    getAppPath: () => '/tmp/litroot-test'
+    getAppPath: () => '/tmp/litroot-test',
+    getPath: () => '/tmp/litroot-user-data'
   }
 }))
 
@@ -16,7 +20,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, spawn: spawnMock }
 })
 
-import { WslServiceManager } from '../../src/main/wsl-manager.js'
+import { ServiceRuntimeManager, windowsPaperFetchCommand } from '../../src/main/wsl-manager.js'
 
 class FakeReadable extends EventEmitter {
   setEncoding(): this {
@@ -49,10 +53,11 @@ class FakeChildProcess extends EventEmitter {
   }
 }
 
-const distribution = process.env.LITROOT_DEV_DISTRIBUTION || 'Local WSL development'
+const target = { kind: 'local' } as const
 let children: FakeChildProcess[] = []
 
 beforeEach(() => {
+  vi.stubEnv('PAPER_FETCH_BIN', '/bin/true')
   children = []
   spawnMock.mockReset()
   spawnMock.mockImplementation(() => {
@@ -66,14 +71,15 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })
 
-describe('WSL service startup', () => {
-  it('shares one in-flight startup per distribution', async () => {
-    const manager = new WslServiceManager(() => undefined)
-    const first = manager.client(distribution)
-    const second = manager.client(distribution)
+describe('service runtime startup', () => {
+  it('shares one in-flight startup per runtime', async () => {
+    const manager = new ServiceRuntimeManager(() => undefined)
+    const first = manager.client(target)
+    const second = manager.client(target)
 
     expect(first).toBe(second)
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
@@ -86,19 +92,37 @@ describe('WSL service startup', () => {
   })
 
   it('clears a failed startup so a later call can retry', async () => {
-    const manager = new WslServiceManager(() => undefined)
-    const first = manager.client(distribution)
-    const second = manager.client(distribution)
+    const manager = new ServiceRuntimeManager(() => undefined)
+    const first = manager.client(target)
+    const second = manager.client(target)
 
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
     children[0]?.fail('first startup failed')
     await expect(first).rejects.toThrow('first startup failed')
     await expect(second).rejects.toThrow('first startup failed')
 
-    const retry = manager.client(distribution)
+    const retry = manager.client(target)
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2))
     children[1]?.ready(43124)
     await expect(retry).resolves.toMatchObject({ baseUrl: 'http://127.0.0.1:43124' })
     await manager.close()
+  })
+})
+
+describe('Windows paper-fetch command resolution', () => {
+  it('uses the official installer Python without executing the cmd shim', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'litroot-paper-fetch-'))
+    try {
+      await mkdir(join(root, 'bin'))
+      await mkdir(join(root, 'runtime'))
+      await writeFile(join(root, 'bin', 'paper-fetch.cmd'), '@echo off\n')
+      await writeFile(join(root, 'runtime', 'python.exe'), '')
+      await expect(windowsPaperFetchCommand(join(root, 'bin', 'paper-fetch.cmd'))).resolves.toEqual({
+        executable: join(root, 'runtime', 'python.exe'),
+        prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli']
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

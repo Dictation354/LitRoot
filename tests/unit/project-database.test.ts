@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { ProjectDatabase } from '../../src/service/project-database.js'
 import { parsePaperMarkdown } from '../../src/service/paper-markdown.js'
@@ -8,7 +12,8 @@ function add(
   id: string,
   path: string,
   markdown: string,
-  modifiedAt = '2026-08-24T00:00:00.000Z'
+  modifiedAt = '2026-08-24T00:00:00.000Z',
+  addedAt = '2025-12-01T00:00:00.000Z'
 ): void {
   const result = parsePaperMarkdown(markdown)
   if (result.kind !== 'paper') throw new Error('Expected trusted Markdown fixture.')
@@ -20,11 +25,38 @@ function add(
     rawMarkdown: markdown,
     parsed: result.paper,
     overrides: {},
+    addedAt,
     modifiedAt
   })
 }
 
 describe('project FTS index', () => {
+  it('migrates an existing v1 cache to the date-aware schema', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'litroot-database-'))
+    const path = join(directory, 'index.sqlite3')
+    try {
+      const legacy = new DatabaseSync(path)
+      legacy.exec(`
+        CREATE TABLE papers (id TEXT PRIMARY KEY);
+        CREATE VIRTUAL TABLE paper_fts USING fts5(paper_id UNINDEXED, title);
+        PRAGMA user_version = 1;
+      `)
+      legacy.close()
+
+      new ProjectDatabase(path).close()
+      const migrated = new DatabaseSync(path)
+      const columns = migrated.prepare('PRAGMA table_info(papers)').all() as Array<{ name: string }>
+      const version = migrated.prepare('PRAGMA user_version').get() as { user_version: number }
+      expect(columns.map((column) => column.name)).toEqual([
+        'id', 'added_at', 'last_opened_at'
+      ])
+      expect(version.user_version).toBe(2)
+      migrated.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('searches every metadata/body field and applies a year filter with pagination', () => {
     const database = new ProjectDatabase(':memory:')
     add(database, 'paper_aaaaaaaaaaaaaaaaaaaaaaaa', 'papers/first.md', paperMarkdown({
@@ -74,6 +106,27 @@ describe('project FTS index', () => {
     expect(database.search({
       projectId: 'project_test', sortBy: 'modifiedAt', sortDirection: 'asc'
     }).items.map((item) => item.title)).toEqual(['Zulu', 'No year', 'Alpha'])
+    database.close()
+  })
+
+  it('records the file creation date and updates the last opened date independently', () => {
+    const database = new ProjectDatabase(':memory:')
+    const id = 'paper_dddddddddddddddddddddddd'
+    add(
+      database,
+      id,
+      'papers/dates.md',
+      paperMarkdown({ title: 'Dated paper', doi: '10.4242/dates' }),
+      '2026-08-24T00:00:00.000Z',
+      '2026-01-02T03:04:05.000Z'
+    )
+
+    expect(database.get(id)).toMatchObject({
+      addedAt: '2026-01-02T03:04:05.000Z',
+      lastOpenedAt: null
+    })
+    expect(database.markOpened(id, '2026-08-29T07:00:00.000Z')).toBe('2026-08-29T07:00:00.000Z')
+    expect(database.get(id)?.lastOpenedAt).toBe('2026-08-29T07:00:00.000Z')
     database.close()
   })
 })

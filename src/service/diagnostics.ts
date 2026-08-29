@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { DependencyReport } from '../shared/contracts.js'
 import { dependencyRepair } from '../shared/dependency-repair.js'
+import { paperFetchCommandFromEnvironment } from './paper-fetch-command.js'
 
 interface CommandResult {
   ok: boolean
@@ -43,12 +44,14 @@ function nodeSupported(version: string): boolean {
   return major === 24 && (minor > 15 || (minor === 15 && patch >= 0))
 }
 
-export async function diagnoseEnvironment(distribution = 'WSL'): Promise<DependencyReport> {
-  const paperFetchExecutable = process.env.PAPER_FETCH_BIN || 'paper-fetch'
-  const [paperFetch, git] = await Promise.all([
-    command(paperFetchExecutable, ['--version']),
-    command('git', ['--version'])
-  ])
+export async function diagnoseEnvironment(
+  runtimeLabel = process.env.LITROOT_RUNTIME_LABEL || '本机'
+): Promise<DependencyReport> {
+  const paperFetch = paperFetchCommandFromEnvironment()
+  const paperFetchResult = await command(
+    paperFetch.executable,
+    [...paperFetch.prefixArgs, '--version']
+  )
   const nodeVersion = process.version
   const checks: DependencyReport['checks'] = [
     {
@@ -57,24 +60,16 @@ export async function diagnoseEnvironment(distribution = 'WSL'): Promise<Depende
       version: nodeVersion,
       required: '24.15+',
       repairCommand: dependencyRepair.node,
-      reason: nodeSupported(nodeVersion) ? null : 'LitRoot WSL 服务要求 Node.js 24.15 或更高的 24.x 版本。'
+      reason: nodeSupported(nodeVersion) ? null : 'LitRoot 服务要求 Node.js 24.15 或更高的 24.x 版本。'
     },
     {
       name: 'paper-fetch',
-      ok: paperFetch.ok,
-      version: paperFetch.ok ? paperFetch.output.split(/\r?\n/, 1)[0] ?? null : null,
+      ok: paperFetchResult.ok,
+      version: paperFetchResult.ok ? paperFetchResult.output.split(/\r?\n/, 1)[0] ?? null : null,
       required: '可执行的官方 paper-fetch',
       repairCommand: dependencyRepair.paperFetch,
-      reason: paperFetch.reason
-    },
-    {
-      name: 'git',
-      ok: git.ok,
-      version: git.ok ? git.output.split(/\r?\n/, 1)[0] ?? null : null,
-      required: 'Git',
-      repairCommand: dependencyRepair.git,
-      reason: git.reason
+      reason: paperFetchResult.reason
     }
   ]
-  return { distribution, ready: checks.every((check) => check.ok), checks }
+  return { runtimeLabel, ready: checks.every((check) => check.ok), checks }
 }

@@ -13,6 +13,8 @@ import { IPC } from '../shared/contracts.js'
 
 let mainWindow: BrowserWindow | null = null
 let controller: AppController | null = null
+const managedWindows = new Set<BrowserWindow>()
+const readerWindows = new Map<string, BrowserWindow>()
 const singleInstance = app.requestSingleInstanceLock()
 
 if (!singleInstance) app.quit()
@@ -64,29 +66,8 @@ async function registerAssetProtocol(): Promise<void> {
   })
 }
 
-function createWindow(): BrowserWindow {
-  const iconPath = app.isPackaged
-    ? join(process.resourcesPath, 'litroot-app-icon.png')
-    : join(app.getAppPath(), 'resources', 'litroot-app-icon.png')
-  const window = new BrowserWindow({
-    width: 1480,
-    height: 940,
-    minWidth: 1080,
-    minHeight: 680,
-    show: false,
-    backgroundColor: '#f5f3ed',
-    title: 'LitRoot',
-    icon: nativeImage.createFromPath(iconPath),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      devTools: !app.isPackaged
-    }
-  })
+function secureWindow(window: BrowserWindow): void {
+  managedWindows.add(window)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => {
     const developmentUrl = developmentRendererUrl(app.isPackaged, process.env.ELECTRON_RENDERER_URL)
@@ -100,26 +81,101 @@ function createWindow(): BrowserWindow {
     }
     if (!allowed) event.preventDefault()
   })
+  window.on('closed', () => managedWindows.delete(window))
+}
+
+function loadRenderer(window: BrowserWindow, query?: Record<string, string>): void {
+  const developmentUrl = developmentRendererUrl(app.isPackaged, process.env.ELECTRON_RENDERER_URL)
+  if (developmentUrl) {
+    const url = new URL(developmentUrl)
+    for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value)
+    void window.loadURL(url.toString())
+  } else {
+    void window.loadFile(join(__dirname, '../renderer/index.html'), query ? { query } : undefined)
+  }
+}
+
+function windowPreferences() {
+  return {
+    preload: join(__dirname, '../preload/index.js'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    devTools: !app.isPackaged
+  }
+}
+
+function createWindow(): BrowserWindow {
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'litroot-app-icon.png')
+    : join(app.getAppPath(), 'resources', 'litroot-app-icon.png')
+  const window = new BrowserWindow({
+    width: 1480,
+    height: 940,
+    minWidth: 1080,
+    minHeight: 680,
+    show: false,
+    backgroundColor: '#f5f3ed',
+    title: 'LitRoot',
+    icon: nativeImage.createFromPath(iconPath),
+    webPreferences: windowPreferences()
+  })
+  secureWindow(window)
   window.once('ready-to-show', () => window.show())
   window.on('closed', () => {
-    if (mainWindow === window) mainWindow = null
+    if (mainWindow !== window) return
+    mainWindow = null
+    for (const reader of readerWindows.values()) reader.close()
   })
-
-  const developmentUrl = developmentRendererUrl(app.isPackaged, process.env.ELECTRON_RENDERER_URL)
-  if (developmentUrl) void window.loadURL(developmentUrl)
-  else void window.loadFile(join(__dirname, '../renderer/index.html'))
+  loadRenderer(window)
   return window
+}
+
+async function openPaperWindow(projectId: string, paperId: string): Promise<void> {
+  const key = `${projectId}:${paperId}`
+  const existing = readerWindows.get(key)
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+    return
+  }
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'litroot-app-icon.png')
+    : join(app.getAppPath(), 'resources', 'litroot-app-icon.png')
+  const window = new BrowserWindow({
+    width: 1080,
+    height: 820,
+    minWidth: 720,
+    minHeight: 520,
+    show: false,
+    backgroundColor: '#f5f3ed',
+    title: 'LitRoot 阅读器',
+    icon: nativeImage.createFromPath(iconPath),
+    webPreferences: windowPreferences()
+  })
+  readerWindows.set(key, window)
+  secureWindow(window)
+  window.once('ready-to-show', () => window.show())
+  window.on('closed', () => {
+    if (readerWindows.get(key) === window) readerWindows.delete(key)
+  })
+  loadRenderer(window, { readerProjectId: projectId, readerPaperId: paperId })
 }
 
 async function start(): Promise<void> {
   denyRendererPermissions(session.defaultSession)
   controller = new AppController((event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.eventsPush, event)
+    for (const window of managedWindows) {
+      if (!window.isDestroyed()) window.webContents.send(IPC.eventsPush, event)
+    }
   })
   await controller.start()
   await registerAssetProtocol()
   mainWindow = createWindow()
-  registerIpc(controller, mainWindow)
+  registerIpc(controller, () => [...managedWindows], openPaperWindow)
 }
 
 app.on('certificate-error', (event, _webContents, _url, _error, _certificate, callback) => {

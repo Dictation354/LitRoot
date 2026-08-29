@@ -1,17 +1,19 @@
-# Windows 11 + WSL2 physical acceptance
+# Windows 11 native + WSL2 physical acceptance
 
-This checklist requires a real Windows 11 machine and is intentionally separate from automated Linux tests.
+This checklist requires a real x64 Windows 11 machine and is intentionally separate from automated package smoke tests.
 
 ## Setup
 
 1. Install the unsigned LitRoot build from `release/` on Windows 11.
-2. Prepare a WSL2 distribution with Node.js 24.15+, official `paper-fetch`, and Git. Keep Node and paper-fetch visible only through the login-shell configuration (for example, `nvm` and the managed paper-fetch block in `.bashrc`); do not add test-only `/usr/local/bin` shims.
-3. Create an empty WSL-native project directory under `/home/...`; do not use `/mnt/c`, a network share, or NTFS.
+2. Install the official Windows x64 `paper-fetch` package, then prepare a WSL2 distribution with Node.js 24.15+ and official `paper-fetch`. Keep WSL Node and paper-fetch visible through the login-shell configuration; do not add test-only shims.
+3. Create one empty native NTFS project directory and one WSL-native directory under `/home/...`; do not place the WSL project under `/mnt/c`.
 
 ## Required evidence
 
-- Launch `LitRoot.exe`, select the intended distribution, and record the successful dependency diagnostic.
-- Connect the WSL absolute project path and verify all fixed directories were created.
+- Launch `LitRoot.exe`, select **Windows 本机**, and record the successful bundled-Node and paper-fetch diagnostic.
+- Connect the native project, then verify scan, fetch, notes, export, image copy, and reveal all use Windows paths.
+- Connect the WSL project, select the intended distribution, and record its successful dependency diagnostic.
+- Verify the WSL absolute path and all fixed directories were created.
 - From a separate WSL shell/Agent, write a trusted paper-fetch Markdown file under `papers/`; verify it appears without manual import.
 - Add one DOI and one title through the GUI. Verify identity, fetch, acceptance, output path, and hash are visible.
 - Submit exactly 50 inputs with concurrency 4. Verify input order is stable when completion order differs and one failure does not stop unrelated items.
@@ -22,4 +24,4 @@ This checklist requires a real Windows 11 machine and is intentionally separate 
 - Request an existing DOI and verify no duplicate file is produced. Run a limited refresh and verify the previous full text remains byte-identical.
 - Verify a request to the service port without `Authorization: Bearer <token>` returns 401.
 
-Record the Windows build number, WSL version/distribution, Node version, paper-fetch version, Git version, installer SHA-256, and pass/fail evidence for every item.
+Record the Windows build number, WSL version/distribution, bundled and WSL Node versions, both paper-fetch versions, installer SHA-256, and pass/fail evidence for every item.
