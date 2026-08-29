@@ -67,8 +67,8 @@ jobs:
           expected=(
             "LitRoot-$VERSION-windows-x64-unsigned-setup.exe"
             "LitRoot-$VERSION-windows-x64-unsigned-setup.exe.sha256"
-            "LitRoot-$VERSION-linux-x64.AppImage"
-            "LitRoot-$VERSION-linux-x64.deb"
+            "LitRoot-$VERSION-linux-x86_64.AppImage"
+            "LitRoot-$VERSION-linux-amd64.deb"
             "SHA256SUMS-linux.txt"
             "LitRoot-$VERSION-macos-arm64-unsigned.dmg"
             "SHA256SUMS-macos.txt"
