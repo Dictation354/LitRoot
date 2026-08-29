@@ -1,0 +1,97 @@
+name: Release
+
+run-name: Release ${{ inputs.tag }} from CI run ${{ inputs.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v1.0.0
+        required: true
+        type: string
+      run_id:
+        description: Successful CI workflow run containing the package artifacts
+        required: true
+        type: string
+      release_notes:
+        description: Markdown release notes
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use the vMAJOR.MINOR.PATCH format." >&2
+            exit 1
+          fi
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+          if [[ "$(jq -r .name <<<"$run_json")" != "CI" || "$(jq -r .conclusion <<<"$run_json")" != "success" ]]; then
+            echo "Release source must be a successful CI workflow run." >&2
+            exit 1
+          fi
+          target="$(jq -r .head_sha <<<"$run_json")"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run_id }}
+          path: release-assets
+
+      - name: Verify release assets
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          mapfile -d '' assets < <(find release-assets -mindepth 2 -maxdepth 2 -type f -print0)
+          if [[ "${#assets[@]}" -ne 7 ]]; then
+            echo "Expected seven release files, found ${#assets[@]}." >&2
+            find release-assets -type f -print >&2
+            exit 1
+          fi
+          expected=(
+            "LitRoot-$VERSION-windows-x64-unsigned-setup.exe"
+            "LitRoot-$VERSION-windows-x64-unsigned-setup.exe.sha256"
+            "LitRoot-$VERSION-linux-x64.AppImage"
+            "LitRoot-$VERSION-linux-x64.deb"
+            "SHA256SUMS-linux.txt"
+            "LitRoot-$VERSION-macos-arm64-unsigned.dmg"
+            "SHA256SUMS-macos.txt"
+          )
+          for name in "${expected[@]}"; do
+            if [[ "$(find release-assets -type f -name "$name" | wc -l)" -ne 1 ]]; then
+              echo "Expected exactly one release asset named $name." >&2
+              exit 1
+            fi
+          done
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ steps.source.outputs.target }}
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          mapfile -d '' assets < <(find release-assets -mindepth 2 -maxdepth 2 -type f -print0)
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET" \
+            --title "LitRoot $VERSION" \
+            --notes "$RELEASE_NOTES" \
+            --latest
