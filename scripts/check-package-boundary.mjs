@@ -6,6 +6,7 @@ const workspacePath = join(import.meta.dirname, '..')
 const config = parse(await readFile(join(workspacePath, 'electron-builder.yml'), 'utf8'))
 const packageJson = JSON.parse(await readFile(join(workspacePath, 'package.json'), 'utf8'))
 const ignore = await readFile(join(workspacePath, '.gitignore'), 'utf8')
+const windowsInstaller = await readFile(join(workspacePath, 'installer', 'windows.iss'), 'utf8')
 const failures = []
 const files = Array.isArray(config.files) ? config.files : []
 const resources = Array.isArray(config.extraResources) ? config.extraResources : []
@@ -22,14 +23,34 @@ for (const tree of excludedTrees) {
 if (!resources.some((entry) => entry?.to === 'service/litroot-service.cjs')) {
   failures.push('the single-file LitRoot service must be an explicit external resource')
 }
-const windowsTargets = Array.isArray(config.win?.target) ? config.win.target : []
-if (!windowsTargets.some((entry) => entry?.target === 'nsis' && entry.arch?.includes('x64'))) {
-  failures.push('the Windows package must explicitly target x64 NSIS')
-}
-if (config.nsis?.perMachine !== false || config.nsis?.packElevateHelper !== false) {
-  failures.push('the unsigned MVP installer must stay per-user and omit the unused elevation helper')
+if (config.win?.target !== undefined || config.nsis !== undefined) {
+  failures.push('electron-builder must only produce the unpacked Windows directory, not an NSIS installer')
 }
 if (config.win?.icon !== 'resources/litroot-app-icon.png') failures.push('the Windows executable must use the LitRoot icon')
+if (!packageJson.scripts?.['package:win']?.includes('scripts/compile-windows-installer.mjs')) {
+  failures.push('package:win must compile the Inno Setup installer after producing win-unpacked')
+}
+if (!/^AppId=io\.litroot\.desktop$/m.test(windowsInstaller) || !/^AppVersion=\{#AppVersion\}$/m.test(windowsInstaller)) {
+  failures.push('the Inno Setup installer must keep the stable app identity and injected package version')
+}
+if (!/^ArchitecturesAllowed=x64compatible$/m.test(windowsInstaller)) {
+  failures.push('the Inno Setup installer must require an x64-compatible Windows system')
+}
+if (
+  !/^PrivilegesRequired=lowest$/m.test(windowsInstaller) ||
+  !/^DefaultDirName=\{localappdata\}\\Programs\\LitRoot$/m.test(windowsInstaller)
+) {
+  failures.push('the Inno Setup installer must remain a per-user install without elevation')
+}
+if (!/^Source: "\.\.\\release\\win-unpacked\\\*";/m.test(windowsInstaller)) {
+  failures.push('the Inno Setup installer must package release/win-unpacked recursively')
+}
+if (!/^OutputBaseFilename=LitRoot-\{#AppVersion\}-windows-x64-unsigned-setup$/m.test(windowsInstaller)) {
+  failures.push('the Inno Setup output name must retain the unsigned Windows x64 setup convention')
+}
+if (!/^SetupIconFile=\.\.\\resources\\litroot-app-icon\.ico$/m.test(windowsInstaller)) {
+  failures.push('the Inno Setup installer must use the LitRoot ICO icon')
+}
 const linuxTargets = Array.isArray(config.linux?.target) ? config.linux.target : []
 for (const target of ['AppImage', 'deb']) {
   if (!linuxTargets.some((entry) => entry?.target === target && entry.arch?.includes('x64'))) {

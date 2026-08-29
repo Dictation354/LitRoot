@@ -13,6 +13,7 @@ import { bridge } from './bridge'
 interface MarkdownReaderProps {
   projectId: string
   paperId: string
+  title: string
   markdown: string
 }
 
@@ -38,6 +39,36 @@ const MAX_READER_FONT_SIZE = 24
 const SEARCH_HIGHLIGHT = 'litroot-search-match'
 const ACTIVE_SEARCH_HIGHLIGHT = 'litroot-search-active'
 const USER_HIGHLIGHT = 'litroot-user-highlight'
+
+function comparableTitle(value: string): string {
+  return value
+    .replace(/<[^>]*>/gu, '')
+    .replace(/&#(x[\da-f]+|\d+);/giu, (_entity, code: string) => {
+      const value = Number.parseInt(code.startsWith('x') || code.startsWith('X') ? code.slice(1) : code, code.toLowerCase().startsWith('x') ? 16 : 10)
+      try {
+        return String.fromCodePoint(value)
+      } catch {
+        return ''
+      }
+    })
+    .replace(/&(amp|lt|gt|quot|apos);/giu, (entity) => ({
+      '&amp;': '&',
+      '&lt;': '<',
+      '&gt;': '>',
+      '&quot;': '"',
+      '&apos;': "'"
+    })[entity.toLowerCase()] ?? entity)
+    .replace(/[*_~`]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLocaleLowerCase()
+}
+
+function withoutDuplicateTitle(markdown: string, title: string): string {
+  const heading = /^(?:[ \t]*\r?\n)*[ \t]{0,3}#(?!#)[ \t]+(.+?)[ \t]*#?[ \t]*(?:\r?\n|$)/u.exec(markdown)
+  if (!heading || comparableTitle(heading[1] ?? '') !== comparableTitle(title)) return markdown
+  return markdown.slice(heading[0].length).replace(/^\r?\n/u, '')
+}
 
 function loadReaderFontSize(): number {
   try {
@@ -143,7 +174,7 @@ const urlTransform: UrlTransform = (url, key) => {
   return safeMarkdownLink(url) ?? '#blocked-link'
 }
 
-export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId, markdown }: MarkdownReaderProps) {
+export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId, title, markdown }: MarkdownReaderProps) {
   const articleRef = useRef<HTMLElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchRangesRef = useRef<Range[]>([])
@@ -362,6 +393,7 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
       )
     }
   }), [paperId, projectId])
+  const displayedMarkdown = useMemo(() => withoutDuplicateTitle(markdown, title), [markdown, title])
 
   return (
     <>
@@ -422,7 +454,7 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
           urlTransform={urlTransform}
           components={components}
         >
-          {markdown}
+          {displayedMarkdown}
         </ReactMarkdown>
       </article>
       {contextMenu && createPortal(

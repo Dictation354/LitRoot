@@ -47,15 +47,6 @@ linux:
 
 win:
   icon: resources/litroot-app-icon.png
-  target:
-    - target: nsis
-      arch: [x64]
-  artifactName: '${productName}-${version}-windows-${arch}-unsigned-setup.${ext}'
-
-nsis:
-  oneClick: true
-  perMachine: false
-  packElevateHelper: false
 
 dmg:
   sign: false

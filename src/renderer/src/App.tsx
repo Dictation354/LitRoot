@@ -133,7 +133,7 @@ function ReaderWindow({ projectId, paperId }: { projectId: string; paperId: stri
         </div>
       </header>
       <ReaderErrorBoundary key={`${projectId}:${paper.id}:${paper.markdownRevision}`}>
-        <MarkdownReader projectId={projectId} paperId={paper.id} markdown={paper.markdown} />
+        <MarkdownReader projectId={projectId} paperId={paper.id} title={paper.title} markdown={paper.markdown} />
       </ReaderErrorBoundary>
     </main>
   )
@@ -780,7 +780,7 @@ function WorkspaceApp() {
                       </div>
                     </header>
                     <ReaderErrorBoundary key={`${selectedProject.id}:${activePaper.id}:${activePaper.markdownRevision}`}>
-                      <MarkdownReader projectId={selectedProject.id} paperId={activePaper.id} markdown={activePaper.markdown} />
+                      <MarkdownReader projectId={selectedProject.id} paperId={activePaper.id} title={activePaper.title} markdown={activePaper.markdown} />
                     </ReaderErrorBoundary>
                   </>
                 ) : (

@@ -81,6 +81,6 @@ pnpm run build
 pnpm dev
 ```
 
-Build engineering artifacts with `pnpm run package:win`, `pnpm run package:linux`, or `pnpm run package:mac`. Outputs are an unsigned Windows x64 NSIS installer, Linux x64 AppImage and deb packages, and an unsigned/unnotarized macOS 15+ arm64 DMG. See [docs/architecture.md](docs/architecture.md) for internals and [docs/windows-acceptance.md](docs/windows-acceptance.md) for native Windows and WSL2 acceptance.
+Build release artifacts with `pnpm run package:win`, `pnpm run package:linux`, or `pnpm run package:mac`. Windows packaging uses electron-builder for the x64 `win-unpacked` directory and Inno Setup for the unsigned `LitRoot-<version>-windows-x64-unsigned-setup.exe`; local builds require Inno Setup 6 `ISCC.exe` on `PATH`, while the GitHub `windows-2022` runner uses its [preinstalled Inno Setup](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md?plain=1). Manually uninstall an older NSIS build before installing this version; it is not detected, removed, or migrated automatically. Linux outputs x64 AppImage and deb packages, and macOS outputs an unsigned/unnotarized macOS 15+ arm64 DMG that may trigger Gatekeeper. See [docs/architecture.md](docs/architecture.md) for internals and [docs/windows-acceptance.md](docs/windows-acceptance.md) for native Windows and WSL2 acceptance.
 
-The MVP repository may remain private. Public licensing, signed installers, and one-click environment provisioning are not part of this iteration.
+The current release artifacts are unsigned and do not include one-click environment provisioning.

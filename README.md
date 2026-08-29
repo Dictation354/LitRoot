@@ -81,7 +81,7 @@ pnpm run build
 pnpm dev
 ```
 
-Node 版本见 [.node-version](.node-version)。生成各平台工程安装包：
+Node 版本见 [.node-version](.node-version)。生成各平台安装包：
 
 ```bash
 pnpm run package:win
@@ -89,8 +89,8 @@ pnpm run package:linux
 pnpm run package:mac
 ```
 
-Windows 输出未签名 x64 NSIS，Linux 输出 x64 AppImage 与 deb，macOS 输出未签名、未公证的 arm64 DMG。macOS 工程包可能触发 Gatekeeper 提示，不应视为可信公共发行版。
+Windows 打包先由 electron-builder 生成 x64 `win-unpacked`，再输出未签名 Inno Setup 安装器 `LitRoot-<version>-windows-x64-unsigned-setup.exe`；本机构建要求 Inno Setup 6 的 `ISCC.exe` 位于 `PATH`，GitHub `windows-2022` runner 使用[预装的 Inno Setup](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md?plain=1)。从旧 NSIS 安装包升级前需先手动卸载旧版，本次不自动检测、卸载或迁移。Linux 输出 x64 AppImage 与 deb，macOS 输出未签名、未公证的 arm64 DMG；未签名的 macOS 安装包可能触发 Gatekeeper 提示。
 
 完整架构说明见 [docs/architecture.md](docs/architecture.md)，Windows 本机与 WSL2 实机验收步骤见 [docs/windows-acceptance.md](docs/windows-acceptance.md)。
 
-本仓库在 MVP 阶段保持私有；公开许可证、签名安装器和一键环境安装不在当前范围内。
+当前发布的安装包未签名，也不包含一键环境安装功能。

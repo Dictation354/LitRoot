@@ -1,6 +1,6 @@
 {
   "name": "litroot",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "private": true,
   "description": "A project-scoped local literature manager for paper-fetch Markdown.",
   "type": "module",
@@ -26,7 +26,7 @@
     "audit:licenses": "pnpm licenses list --prod",
     "package:prepare": "pnpm run build && pnpm run check:package-boundary",
     "package:win:dir": "pnpm run package:prepare && pnpm dlx electron-builder@26.15.6 --win --x64 --dir --publish never",
-    "package:win": "pnpm run package:prepare && pnpm dlx electron-builder@26.15.6 --win nsis --x64 --publish never",
+    "package:win": "pnpm run package:win:dir && node scripts/compile-windows-installer.mjs",
     "package:linux:dir": "pnpm run package:prepare && pnpm dlx electron-builder@26.15.6 --linux --x64 --dir --publish never",
     "package:linux": "pnpm run package:prepare && pnpm dlx electron-builder@26.15.6 --linux AppImage deb --x64 --publish never",
     "package:mac:dir": "pnpm run package:prepare && pnpm dlx electron-builder@26.15.6 --mac --arm64 --dir --publish never",

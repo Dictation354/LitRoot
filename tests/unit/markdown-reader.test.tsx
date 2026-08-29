@@ -55,6 +55,7 @@ describe('safe Markdown reader', () => {
           <MarkdownReader
             projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
             paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+            title="Test paper"
             markdown={'Alpha body alpha\n\n![Figure](assets/figure.png)'}
           />
         )
@@ -126,6 +127,7 @@ describe('safe Markdown reader', () => {
       <MarkdownReader
         projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
         paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+        title="Test paper"
         markdown={'<script>alert(1)</script>\n<a href="javascript:alert(2)" onclick="steal()">bad</a>\n![remote](https://evil.test/tracker.png)\n<picture><source srcset="https://evil.test/source.png"><img src="https://evil.test/fallback.png"></picture>'}
       />
     )
@@ -141,6 +143,7 @@ describe('safe Markdown reader', () => {
       <MarkdownReader
         projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
         paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+        title="Test paper"
         markdown={'| A | B |\n|---|---|\n| 1 | 2 |\n\n```ts\nconst safe = true\n```\n\n$E = mc^2$'}
       />
     )
@@ -154,6 +157,7 @@ describe('safe Markdown reader', () => {
       <MarkdownReader
         projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
         paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+        title="Test paper"
         markdown={'$T_c - T_a = \\frac{R_n - G}{g_c C_p + g_H C_p VPD}$'}
       />
     )
@@ -161,6 +165,7 @@ describe('safe Markdown reader', () => {
       <MarkdownReader
         projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
         paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+        title="Test paper"
         markdown={'The relation $E = mc^2$ remains inline.'}
       />
     )
@@ -180,6 +185,7 @@ describe('safe Markdown reader', () => {
       <MarkdownReader
         projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
         paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+        title="Test paper"
         markdown={markdown}
       />
     )
@@ -202,5 +208,23 @@ describe('safe Markdown reader', () => {
     )
     expect(html).toContain('<scp>CO<sub>2</sub></scp> &amp; H<sub>2</sub>O')
     expect(html).not.toMatch(/script|alert/i)
+  })
+
+  it('omits only a leading level-one heading that duplicates the page title', () => {
+    const render = (markdown: string) => renderToStaticMarkup(
+      <MarkdownReader
+        projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
+        paperId="paper_bbbbbbbbbbbbbbbbbbbbbbbb"
+        title="Fluxes of CO2 & H2O"
+        markdown={markdown}
+      />
+    )
+
+    const duplicate = render('# Fluxes of CO2 &amp; H2O\n\n## Abstract\n\nBody')
+    expect(duplicate).not.toContain('<h1>')
+    expect(duplicate).toContain('<h2>Abstract</h2>')
+
+    const distinct = render('# Introduction\n\nBody')
+    expect(distinct).toContain('<h1>Introduction</h1>')
   })
 })
