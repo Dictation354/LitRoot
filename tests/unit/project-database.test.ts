@@ -129,4 +129,32 @@ describe('project FTS index', () => {
     expect(database.get(id)?.lastOpenedAt).toBe('2026-08-29T07:00:00.000Z')
     database.close()
   })
+
+  it('keeps full details separate from the narrow paper reference lookup', () => {
+    const database = new ProjectDatabase(':memory:')
+    const id = 'paper_eeeeeeeeeeeeeeeeeeeeeeee'
+    const markdown = paperMarkdown({
+      title: 'Reference paper',
+      doi: '10.4242/reference',
+      url: 'https://example.test/reference',
+      body: 'Body retained only by the detail lookup.\n\n![Figure](assets/figure.png)'
+    })
+    add(database, id, 'papers/reference.md', markdown)
+
+    expect(database.reference(id)).toEqual({
+      id,
+      relativePath: 'papers/reference.md',
+      filePath: '/project/papers/reference.md',
+      title: 'Reference paper',
+      doi: '10.4242/reference',
+      url: 'https://example.test/reference',
+      assetPaths: ['assets/figure.png']
+    })
+    expect(database.findByDoi('10.4242/reference')).toEqual(database.reference(id))
+    expect(database.get(id)).toMatchObject({
+      markdown: expect.stringContaining('Body retained only by the detail lookup.'),
+      markdownRevision: expect.any(String)
+    })
+    database.close()
+  })
 })

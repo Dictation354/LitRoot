@@ -4,7 +4,7 @@ import type {
   MetadataOverrides,
   PaperDetail
 } from '../../shared/contracts'
-import { bridge, errorMessage } from './bridge'
+import { bridge, BridgeError, errorMessage } from './bridge'
 
 interface MetadataEditorProps {
   projectId: string
@@ -77,12 +77,12 @@ export function MetadataEditor({ projectId, paper, onChange, onLocatePaper }: Me
       onChange(next)
       setMessage('元数据已保存并更新搜索索引。')
     } catch (error) {
-      const message = errorMessage(error)
-      setMessage(message)
-      if (/DOI|已存在/.test(message) && form.doi.trim()) {
-        const result = await bridge().papers.search({ projectId, query: form.doi, limit: 20 })
-        const existing = result.items.find((item) => item.doi === form.doi.trim().toLowerCase() && item.id !== paper.id)
-        if (existing) onLocatePaper(existing.id)
+      setMessage(errorMessage(error))
+      if (error instanceof BridgeError && error.code === 'doi_conflict') {
+        const existingPaperId = error.details && typeof error.details === 'object'
+          ? Reflect.get(error.details, 'existingPaperId')
+          : null
+        if (typeof existingPaperId === 'string') onLocatePaper(existingPaperId)
       }
     } finally {
       setSaving(false)

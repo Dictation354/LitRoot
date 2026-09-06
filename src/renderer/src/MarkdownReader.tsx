@@ -310,7 +310,7 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     if (!image && (!selectedRange || !selectionInside)) return
     event.preventDefault()
     const menuWidth = 154
-    const menuHeight = image ? 43 : 78
+    const menuHeight = 78
     setContextMenu({
       x: Math.min(event.clientX, Math.max(8, window.innerWidth - menuWidth - 8)),
       y: Math.min(event.clientY, Math.max(8, window.innerHeight - menuHeight - 8)),
@@ -355,6 +355,18 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
       setStatus('已复制图片')
     } catch {
       setStatus('复制图片失败')
+    }
+  }
+
+  const openSelectedImage = async (): Promise<void> => {
+    const source = contextMenu?.imageSource
+    setContextMenu(null)
+    if (!source) return
+    try {
+      await bridge().papers.openImage(projectId, paperId, source)
+      setStatus('已请求系统打开图片')
+    } catch {
+      setStatus('打开图片失败')
     }
   }
 
@@ -466,7 +478,10 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
             onMouseDown={(event) => event.stopPropagation()}
           >
             {contextMenu.imageSource ? (
-              <button type="button" role="menuitem" onClick={() => void copySelectedImage()}>复制图片</button>
+              <>
+                <button type="button" role="menuitem" onClick={() => void copySelectedImage()}>复制图片</button>
+                <button type="button" role="menuitem" onClick={() => void openSelectedImage()}>打开大图</button>
+              </>
             ) : (
               <>
                 <button type="button" role="menuitem" onClick={() => void copySelectedText()}>复制</button>

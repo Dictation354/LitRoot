@@ -270,7 +270,7 @@ export class LitRootHttpServer {
     response.flushHeaders()
     response.write(': connected\n\n')
     const send = (event: ServiceEvent): void => {
-      if (!selectedProjectId || event.projectId === selectedProjectId) {
+      if (!selectedProjectId || ('projectId' in event && event.projectId === selectedProjectId)) {
         response.write(`data: ${JSON.stringify(event)}\n\n`)
       }
     }

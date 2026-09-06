@@ -14,7 +14,6 @@ interface Candidate {
   relativePath: string
   addedAt: string | null
   modifiedAt: string
-  size: number
 }
 
 const MAX_MARKDOWN_BYTES = 64 * 1024 * 1024
@@ -43,8 +42,7 @@ async function walkPapers(layout: ProjectLayout, signal?: AbortSignal): Promise<
         path: canonical,
         relativePath: portableRelativePath(relative(layout.root, canonical)),
         addedAt: info.birthtimeMs > 0 ? info.birthtime.toISOString() : null,
-        modifiedAt: info.mtime.toISOString(),
-        size: info.size
+        modifiedAt: info.mtime.toISOString()
       })
     }
   }
@@ -95,7 +93,12 @@ export class ProjectScanner {
     const controller = new AbortController()
     this.controller = controller
     const startedAt = new Date().toISOString()
-    this.events.emit({ type: 'scan.started', projectId: this.layout.id, at: startedAt })
+    let announced = false
+    const announce = (): void => {
+      if (announced) return
+      announced = true
+      this.events.emit({ type: 'scan.started', projectId: this.layout.id, at: startedAt })
+    }
     const counts = { discovered: 0, indexed: 0, unchanged: 0, removed: 0, issues: 0 }
     try {
       const [candidates, persistedIdentities] = await Promise.all([
@@ -116,6 +119,7 @@ export class ProjectScanner {
           try {
             knownStored = await this.metadata.read(knownPaperId) ?? undefined
           } catch (error) {
+            announce()
             this.database.setIssue(candidate.relativePath, error instanceof Error ? error.message : String(error))
             counts.issues += 1
             continue
@@ -132,6 +136,7 @@ export class ProjectScanner {
         const parsed = parsePaperMarkdown(raw, fallbackMarkdownName(candidate.path))
         if (parsed.kind === 'ignore') continue
         if (parsed.kind === 'issue') {
+          announce()
           this.database.setIssue(candidate.relativePath, parsed.reason)
           counts.issues += 1
           continue
@@ -148,6 +153,7 @@ export class ProjectScanner {
           try {
             stored = await this.metadata.read(paperId)
           } catch (error) {
+            announce()
             this.database.setIssue(candidate.relativePath, error instanceof Error ? error.message : String(error))
             counts.issues += 1
             continue
@@ -159,6 +165,7 @@ export class ProjectScanner {
           ? this.database.findByDoi(effective.doi, paperId)
           : null
         if (duplicate) {
+          announce()
           this.database.setIssue(
             candidate.relativePath,
             `DOI ${effective.doi} 与 ${duplicate.relativePath} 冲突。`
@@ -167,6 +174,7 @@ export class ProjectScanner {
           continue
         }
 
+        announce()
         seen.add(candidate.relativePath)
         this.database.upsert({
           id: paperId,
@@ -183,7 +191,9 @@ export class ProjectScanner {
         counts.indexed += 1
       }
 
-      counts.removed = this.database.removeMissing(seen, seenCandidates)
+      const removed = this.database.removeMissing(seen, seenCandidates)
+      counts.removed = removed.papers
+      if (removed.papers > 0 || removed.issues > 0) announce()
       const finishedAt = new Date().toISOString()
       this.database.markScanned(finishedAt)
       const result: ScanResult = {
@@ -192,8 +202,10 @@ export class ProjectScanner {
         startedAt,
         finishedAt
       }
-      this.events.emit({ type: 'scan.completed', projectId: this.layout.id, at: finishedAt, result })
-      this.events.emit({ type: 'papers.changed', projectId: this.layout.id, at: finishedAt })
+      if (announced) {
+        this.events.emit({ type: 'scan.completed', projectId: this.layout.id, at: finishedAt, result })
+        this.events.emit({ type: 'papers.changed', projectId: this.layout.id, at: finishedAt })
+      }
       return result
     } finally {
       if (this.controller === controller) this.controller = null

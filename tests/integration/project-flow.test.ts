@@ -16,8 +16,9 @@ async function fixture() {
   await mkdir(projectPath)
   const fake = await createFakePaperFetch(join(sandbox, 'bin'))
   const layout = await initializeProject(projectPath, 'Test Project')
-  const project = new LitRootProject(layout, new ServiceEventBus(), fake)
-  return { sandbox, projectPath, layout, project }
+  const events = new ServiceEventBus()
+  const project = new LitRootProject(layout, events, fake)
+  return { sandbox, projectPath, layout, project, events }
 }
 
 afterEach(async () => {
@@ -60,6 +61,21 @@ describe('project lifecycle', () => {
 
     await unlink(paperPath)
     await waitFor(() => project.search({ projectId: project.layout.id }).total === 0)
+    await project.close()
+  })
+
+  it('does not announce a scan when every paper and sidecar is unchanged', async () => {
+    const { projectPath, project, events } = await fixture()
+    await writePaper(projectPath, 'paper.md', paperMarkdown())
+    await project.start()
+    const observed: string[] = []
+    const unsubscribe = events.subscribe((event) => observed.push(event.type))
+
+    await project.scan()
+
+    expect(observed).not.toContain('scan.started')
+    expect(observed).not.toContain('scan.completed')
+    unsubscribe()
     await project.close()
   })
 

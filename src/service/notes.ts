@@ -41,7 +41,7 @@ export class NoteStore {
     if (kind === 'project') {
       return { schema_version: NOTE_SCHEMA_VERSION, project_id: this.layout.id }
     }
-    const paper = paperId ? this.database.get(paperId) : null
+    const paper = paperId ? this.database.reference(paperId) : null
     if (!paper || !paperId) throw new Error('论文不存在。')
     return {
       schema_version: NOTE_SCHEMA_VERSION,

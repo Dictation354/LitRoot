@@ -4,19 +4,22 @@
 
 LitRoot 是一个以项目目录为事实来源、面向 paper-fetch Markdown 的本地文献管理器。支持 Windows 11 x64 本机或 WSL2、Linux x64，以及 macOS 15+ Apple Silicon，界面为中文。
 
-它只做五件事：
+它只做六件事：
 
 - 编辑论文核心元数据，并在当前项目内执行 FTS5 全文搜索和年份筛选；
 - 安全渲染 paper-fetch Markdown、正文图片、GFM 表格、代码和 KaTeX 数学公式；
 - 通过 GUI 单篇或最多 50 条批量调用官方 `paper-fetch fetch`；
 - 注册多个项目，但浏览、搜索、抓取和笔记始终限定在当前项目；
 - 把项目总笔记和逐篇笔记直接保存为项目内 Markdown。
+- 在全局“期刊雷达”中查看 Crossref 最近登记的文献，并将最多 50 条交给现有 paper-fetch 流程。
 
-LitRoot 不包含收藏、阅读状态、标签、AI 摘要/问答、Digest、Radar、PDF 标注、知识图谱、云同步、协作、Agent Relay 或内嵌终端。
+LitRoot 不包含项目文献收藏/阅读状态、标签、AI 摘要/问答、Digest、订阅自动规则、PDF 标注、知识图谱、云同步、协作、Agent Relay 或内嵌终端。
 
 ## 运行架构
 
 Electron 仅负责窗口、运行环境选择、安全 IPC 和受限图片协议。SQLite、扫描、监听、笔记写入和 paper-fetch 任务由打包为单个 CJS 文件的本地服务执行。Windows 可为每个项目选择本机或 WSL2；Linux 和 macOS 使用本机模式。本机服务通过 Electron 内置 Node 启动，WSL 模式继续通过固定 Bash 登录-shell 加载发行版内的 Node 与 paper-fetch。服务只绑定随机 `127.0.0.1` 端口，并要求 256-bit 会话令牌。
+
+期刊雷达由 Electron 主进程管理，独立保存在 `userData/feeds.sqlite3`，不写入任何项目。期刊名称搜索、ISSN 验证和近期文献均使用 Crossref；“近 N 天”按 DOI 首次登记到 Crossref 的时间计算，正式出版日期单独显示。首次添加期刊回填近 30 天，启动时补刷超过 24 小时未检查的期刊，运行期间每小时检查，临时文献保留 90 天；应用关闭后不后台更新。只有显式添加到项目后，文献才进入现有抓取与验收流程。
 
 前置条件（LitRoot 只诊断并显示修复命令，不会自动安装）：
 

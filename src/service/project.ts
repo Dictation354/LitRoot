@@ -206,19 +206,18 @@ export class LitRootProject {
   private async exportEntries(paperIds: string[], includeImages: boolean): Promise<ExportEntry[]> {
     const entries = new Map<string, ExportEntry>()
     for (const paperId of paperIds) {
-      const paper = this.database.get(paperId)
-      const filePath = this.database.filePath(paperId)
-      if (!paper || !filePath) throw new LitRootError('paper_not_found', '论文不存在。', 404)
-      const markdown = await canonicalFileInside(this.layout.root, filePath)
+      const paper = this.database.reference(paperId)
+      if (!paper) throw new LitRootError('paper_not_found', '论文不存在。', 404)
+      const markdown = await canonicalFileInside(this.layout.root, paper.filePath)
       if (!markdown) throw new LitRootError('invalid_paper_path', '论文文件不存在或越出项目边界。')
-      const paperRelative = portableRelativePath(relative(this.layout.root, filePath))
+      const paperRelative = portableRelativePath(relative(this.layout.root, paper.filePath))
       if (!paperRelative || paperRelative.startsWith('../')) {
         throw new LitRootError('invalid_paper_path', '论文文件越出项目边界。')
       }
       entries.set(paperRelative, { relativePath: paperRelative, sourcePath: markdown, kind: 'paper' })
       if (!includeImages) continue
       for (const source of paper.assetPaths) {
-        const candidate = candidateAssetPath(filePath, source)
+        const candidate = candidateAssetPath(paper.filePath, source)
         if (!candidate) continue
         const image = await validatedImageFileInside(this.layout.root, candidate)
         if (!image) continue

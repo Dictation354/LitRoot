@@ -4,19 +4,22 @@
 
 LitRoot is a project-scoped, local literature manager for Markdown produced by paper-fetch. It supports native Windows 11 x64 or WSL2, Linux x64, and macOS 15+ on Apple Silicon, and ships a Chinese user interface.
 
-It deliberately provides only five capabilities:
+It deliberately provides only six capabilities:
 
 - edit core bibliographic metadata and run project-local FTS5 search with a year filter;
 - safely render paper-fetch Markdown, local body images, GFM tables, code, and KaTeX math;
 - invoke the official `paper-fetch fetch` command for one paper or batches of up to 50;
 - register multiple projects while strictly scoping every browse, search, fetch, and note operation to the active project;
 - store project and per-paper notes as ordinary Markdown inside the project.
+- review papers recently registered by Crossref in the global Journal Radar and send up to 50 of them through the existing paper-fetch workflow.
 
-Favorites, reading status, tags, AI summaries/Q&A, Digest, Radar, PDF annotation, knowledge graphs, cloud sync, collaboration, Agent Relay, and embedded terminals are intentionally out of scope.
+Project-paper favorites/reading status, tags, AI summaries/Q&A, Digest, subscription automation rules, PDF annotation, knowledge graphs, cloud sync, collaboration, Agent Relay, and embedded terminals are intentionally out of scope.
 
 ## Runtime architecture
 
 Electron owns only the desktop windows, runtime selection, narrow IPC, and a restricted image protocol. A bundled single-file service owns SQLite, scanning, file watching, note writes, and paper-fetch jobs. Native mode runs it with Electron's bundled Node; WSL mode retains the fixed Bash login-shell trampoline and uses Node and paper-fetch inside the selected distribution. The service listens on a random `127.0.0.1` port and requires a 256-bit session token on every request.
+
+Journal Radar is owned by the Electron main process and stored separately at `userData/feeds.sqlite3`; it never enters a project directory. Journal-name search, ISSN validation, and recent works all use Crossref. “Past N days” is based on the DOI's first Crossref registration time, while the formal publication date is displayed separately. Adding a journal backfills 30 days; journals not checked for 24 hours are refreshed at startup, due journals are checked hourly while the app runs, and temporary works are retained for 90 days. No updater remains running after the app closes. A work enters a project solely through an explicit handoff to the existing fetch and acceptance workflow.
 
 Prerequisites are diagnosed but never installed automatically:
 

@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ServiceEventBus } from '../../src/service/events.js'
 import { initializeProject } from '../../src/service/project-layout.js'
@@ -9,12 +9,18 @@ import { createFakePaperFetch, paperMarkdown, waitFor, writePaper } from '../hel
 
 const sandboxes: string[] = []
 
-async function fixture(withPaper = false) {
+async function fixture(withPaper: boolean | readonly string[] = false) {
   const sandbox = await mkdtemp(join(tmpdir(), 'litroot-fetch-'))
   sandboxes.push(sandbox)
   const root = join(sandbox, 'project')
   await mkdir(root)
-  if (withPaper) await writePaper(root, 'existing.md', paperMarkdown({ doi: '10.4242/existing', body: 'Old irreplaceable full text.' }))
+  if (Array.isArray(withPaper)) {
+    for (const doi of withPaper) {
+      await writePaper(root, `${doi.split('/')[1]}.md`, paperMarkdown({ doi, body: `Old full text for ${doi}.` }))
+    }
+  } else if (withPaper) {
+    await writePaper(root, 'existing.md', paperMarkdown({ doi: '10.4242/existing', body: 'Old irreplaceable full text.' }))
+  }
   const executable = await createFakePaperFetch(join(sandbox, 'bin'))
   const project = new LitRootProject(await initializeProject(root), new ServiceEventBus(), executable)
   await project.start()
@@ -84,6 +90,24 @@ describe('paper-fetch task orchestration', () => {
     await project.close()
   })
 
+  it('keeps the paper-fetch generated filename for a single-paper archive', async () => {
+    const { sandbox, project } = await fixture()
+    const argsLog = join(sandbox, 'paper-fetch-single-args.json')
+    process.env.PAPER_FETCH_ARGS_LOG = argsLog
+    const created = await project.fetch.create({
+      projectId: project.layout.id,
+      inputs: ['10.5555/generated-name']
+    })
+
+    const run = await terminal(project, created.id)
+    const expectedFilename = `FetchBot_2025_${'A'.repeat(165)}.md`
+
+    expect(run.items[0]?.outputPath && basename(run.items[0].outputPath)).toBe(expectedFilename)
+    expect(JSON.parse(await readFile(argsLog, 'utf8')) as string[]).not.toContain('--output')
+    delete process.env.PAPER_FETCH_ARGS_LOG
+    await project.close()
+  })
+
   it('keeps the old full text when refresh produces only an abstract', async () => {
     const { project } = await fixture(true)
     const existing = project.search({ projectId: project.layout.id }).items[0]
@@ -98,6 +122,78 @@ describe('paper-fetch task orchestration', () => {
     const run = await terminal(project, created.id)
     expect(run.items[0]).toMatchObject({ state: 'limited', errorCode: 'refresh_not_fulltext' })
     expect(await readFile(join(project.layout.root, path ?? ''), 'utf8')).toBe(original)
+    await project.close()
+  })
+
+  it('refreshes multiple existing papers in one run and keeps item targets aligned', async () => {
+    const dois = ['10.4242/first', '10.4242/second']
+    const { project } = await fixture(dois)
+    const papers = project.search({ projectId: project.layout.id }).items
+    const byDoi = new Map(papers.map((paper) => [paper.doi, paper]))
+    const created = await project.fetch.create({
+      projectId: project.layout.id,
+      inputs: dois,
+      refreshPaperIds: dois.map((doi) => byDoi.get(doi)?.id ?? '')
+    })
+
+    const run = await terminal(project, created.id)
+    expect(run.items.map((item) => item.state)).toEqual(['complete', 'complete'])
+    for (const doi of dois) {
+      const paper = byDoi.get(doi)
+      const relativePath = paper ? project.getPaper(paper.id)?.relativePath : null
+      expect(relativePath && await readFile(join(project.layout.root, relativePath), 'utf8'))
+        .toContain('Complete fake full text body.')
+    }
+    expect(project.search({ projectId: project.layout.id }).total).toBe(2)
+    await project.close()
+  })
+
+  it('isolates a limited result while the other batch refresh succeeds', async () => {
+    const dois = ['10.4242/limited', '10.4242/complete'] as const
+    const { project } = await fixture(dois)
+    const papers = project.search({ projectId: project.layout.id }).items
+    const byDoi = new Map(papers.map((paper) => [paper.doi, paper]))
+    const limited = byDoi.get(dois[0])
+    const complete = byDoi.get(dois[1])
+    if (!limited || !complete) throw new Error('Expected both existing papers.')
+    const limitedPath = project.getPaper(limited.id)?.relativePath ?? ''
+    const completePath = project.getPaper(complete.id)?.relativePath ?? ''
+    const limitedOriginal = await readFile(join(project.layout.root, limitedPath), 'utf8')
+    const created = await project.fetch.create({
+      projectId: project.layout.id,
+      inputs: [`${dois[0]} limited`, dois[1]],
+      refreshPaperIds: [limited.id, complete.id]
+    })
+
+    const run = await terminal(project, created.id)
+    expect(run.items.map((item) => item.state)).toEqual(['limited', 'complete'])
+    expect(await readFile(join(project.layout.root, limitedPath), 'utf8')).toBe(limitedOriginal)
+    expect(await readFile(join(project.layout.root, completePath), 'utf8'))
+      .toContain('Complete fake full text body.')
+    await project.close()
+  })
+
+  it('rejects invalid batch refresh target mappings', async () => {
+    const { project } = await fixture(['10.4242/first', '10.4242/second'])
+    const papers = project.search({ projectId: project.layout.id }).items
+    const first = papers.find((paper) => paper.doi === '10.4242/first')
+    if (!first) throw new Error('Expected the first existing paper.')
+
+    await expect(project.fetch.create({
+      projectId: project.layout.id,
+      inputs: ['10.4242/first', '10.4242/second'],
+      refreshPaperIds: [first.id]
+    })).rejects.toThrow('批量刷新目标必须与输入逐项对应')
+    await expect(project.fetch.create({
+      projectId: project.layout.id,
+      inputs: ['10.4242/first', '10.4242/second'],
+      refreshPaperIds: [first.id, first.id]
+    })).rejects.toThrow('批量刷新目标不能重复')
+    await expect(project.fetch.create({
+      projectId: project.layout.id,
+      inputs: ['10.4242/missing'],
+      refreshPaperIds: ['paper_missing']
+    })).rejects.toThrow('批量刷新只支持当前项目中已存在的论文')
     await project.close()
   })
 

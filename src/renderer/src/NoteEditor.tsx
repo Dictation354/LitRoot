@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { NoteDocument, NoteKind, ServiceEvent } from '../../shared/contracts'
-import { bridge, errorMessage } from './bridge'
+import { bridge, BridgeError, errorMessage } from './bridge'
 
 interface NoteEditorProps {
   projectId: string
@@ -74,7 +74,7 @@ export function NoteEditor({ projectId, kind, paperId, event }: NoteEditorProps)
         }
       }).catch((error) => {
         const message = errorMessage(error)
-        if (/外部修改|冲突/.test(message)) setConflict(true)
+        if (error instanceof BridgeError && error.code === 'note_conflict') setConflict(true)
         setStatus(message)
       }).finally(() => {
         saving.current = false

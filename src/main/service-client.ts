@@ -16,7 +16,19 @@ import type {
   ScanResult,
   ServiceEvent
 } from '../shared/contracts.js'
-import { serviceEventSchema } from '../shared/contracts.js'
+import {
+  apiErrorSchema,
+  fetchRunSchema,
+  noteDocumentSchema,
+  paperDetailSchema,
+  paperExportPlanSchema,
+  paperExportResultSchema,
+  paperSearchResultSchema,
+  projectSummarySchema,
+  scanResultSchema,
+  serviceEventSchema
+} from '../shared/contracts.js'
+import { z } from 'zod'
 
 export class ServiceClientError extends Error {
   constructor(
@@ -36,7 +48,11 @@ export class LitRootServiceClient {
     private readonly token: string
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    init: RequestInit = {}
+  ): Promise<T> {
     const response = await fetch(`${this.baseUrl}/api/v1${path}`, {
       ...init,
       headers: {
@@ -45,43 +61,57 @@ export class LitRootServiceClient {
         ...init.headers
       }
     })
-    if (response.status === 204) return undefined as T
-    const body: unknown = await response.json().catch(() => null)
-    if (!response.ok) {
-      const error = body && typeof body === 'object' && 'error' in body
-        ? (body as { error?: { code?: unknown; message?: unknown; details?: unknown } }).error
-        : null
+    if (response.status === 204) {
+      const parsed = schema.safeParse(undefined)
+      if (parsed.success) return parsed.data
       throw new ServiceClientError(
-        typeof error?.code === 'string' ? error.code : 'service_error',
-        typeof error?.message === 'string' ? error.message : `LitRoot 服务返回 HTTP ${response.status}。`,
-        response.status,
-        error?.details
+        'invalid_service_response',
+        'LitRoot 服务返回了无效响应。',
+        response.status
       )
     }
-    return body as T
+    const body: unknown = await response.json().catch(() => null)
+    if (!response.ok) {
+      const parsed = apiErrorSchema.safeParse(body)
+      throw new ServiceClientError(
+        parsed.success ? parsed.data.error.code : 'service_error',
+        parsed.success ? parsed.data.error.message : `LitRoot 服务返回 HTTP ${response.status}。`,
+        response.status,
+        parsed.success ? parsed.data.error.details : undefined
+      )
+    }
+    const parsed = schema.safeParse(body)
+    if (!parsed.success) {
+      throw new ServiceClientError(
+        'invalid_service_response',
+        'LitRoot 服务返回了无效响应。',
+        response.status
+      )
+    }
+    return parsed.data
   }
 
   listProjects(): Promise<ProjectSummary[]> {
-    return this.request('/projects')
+    return this.request('/projects', z.array(projectSummarySchema))
   }
 
   registerProject(path: string, name?: string): Promise<ProjectSummary> {
-    return this.request('/projects/register', {
+    return this.request('/projects/register', projectSummarySchema, {
       method: 'POST',
       body: JSON.stringify({ path, ...(name ? { name } : {}) })
     })
   }
 
   removeProject(projectId: string): Promise<void> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' })
+    return this.request(`/projects/${encodeURIComponent(projectId)}`, z.void(), { method: 'DELETE' })
   }
 
   scan(projectId: string): Promise<ScanResult> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}/scan`, { method: 'POST' })
+    return this.request(`/projects/${encodeURIComponent(projectId)}/scan`, scanResultSchema, { method: 'POST' })
   }
 
   search(request: PaperSearchRequest): Promise<PaperSearchResult> {
-    return this.request(`/projects/${encodeURIComponent(request.projectId)}/search`, {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/search`, paperSearchResultSchema, {
       method: 'POST',
       body: JSON.stringify(request)
     })
@@ -89,25 +119,27 @@ export class LitRootServiceClient {
 
   getPaper(projectId: string, paperId: string): Promise<PaperDetail> {
     return this.request(
-      `/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`
+      `/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,
+      paperDetailSchema
     )
   }
 
   markPaperOpened(projectId: string, paperId: string): Promise<string> {
     return this.request<{ openedAt: string }>(
       `/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/opened`,
+      z.object({ openedAt: z.string() }),
       { method: 'POST' }
     ).then((result) => result.openedAt)
   }
 
   planExport(request: PaperExportRequest): Promise<PaperExportPlan> {
-    return this.request(`/projects/${encodeURIComponent(request.projectId)}/export/plan`, {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/export/plan`, paperExportPlanSchema, {
       method: 'POST', body: JSON.stringify(request)
     })
   }
 
   exportPapers(request: PaperExportExecuteRequest): Promise<PaperExportResult> {
-    return this.request(`/projects/${encodeURIComponent(request.projectId)}/export/execute`, {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/export/execute`, paperExportResultSchema, {
       method: 'POST', body: JSON.stringify(request)
     })
   }
@@ -115,44 +147,45 @@ export class LitRootServiceClient {
   updateMetadata(request: MetadataUpdateRequest): Promise<PaperDetail> {
     return this.request(
       `/projects/${encodeURIComponent(request.projectId)}/papers/${encodeURIComponent(request.paperId)}/metadata`,
+      paperDetailSchema,
       { method: 'PATCH', body: JSON.stringify(request) }
     )
   }
 
   readNote(request: NoteReadRequest): Promise<NoteDocument> {
-    return this.request(`/projects/${encodeURIComponent(request.projectId)}/notes/read`, {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/notes/read`, noteDocumentSchema, {
       method: 'POST', body: JSON.stringify(request)
     })
   }
 
   writeNote(request: NoteWriteRequest): Promise<NoteDocument> {
-    return this.request(`/projects/${encodeURIComponent(request.projectId)}/notes/write`, {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/notes/write`, noteDocumentSchema, {
       method: 'POST', body: JSON.stringify(request)
     })
   }
 
   createFetch(request: CreateFetchRunRequest): Promise<FetchRun> {
-    return this.request(`/projects/${encodeURIComponent(request.projectId)}/fetch`, {
+    return this.request(`/projects/${encodeURIComponent(request.projectId)}/fetch`, fetchRunSchema, {
       method: 'POST', body: JSON.stringify(request)
     })
   }
 
   listFetch(projectId: string): Promise<FetchRun[]> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch`)
+    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch`, z.array(fetchRunSchema))
   }
 
   getFetch(projectId: string, runId: string): Promise<FetchRun> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}`)
+    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}`, fetchRunSchema)
   }
 
   cancelFetch(projectId: string, runId: string): Promise<FetchRun> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}/cancel`, {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}/cancel`, fetchRunSchema, {
       method: 'POST'
     })
   }
 
   resumeFetch(projectId: string, runId: string): Promise<FetchRun> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}/resume`, {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}/resume`, fetchRunSchema, {
       method: 'POST'
     })
   }

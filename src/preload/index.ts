@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { LitRootBridge, ServiceEvent } from '../shared/contracts.js'
+import type { LitRootTransportBridge, ServiceEvent } from '../shared/contracts.js'
 import { IPC } from '../shared/contracts.js'
 import { paperAssetUrl } from './asset-url.js'
 
-const bridge: LitRootBridge = {
+const bridge: LitRootTransportBridge = {
   system: {
     listRuntimes: () => ipcRenderer.invoke(IPC.systemListRuntimes),
     diagnose: (target) => ipcRenderer.invoke(IPC.systemDiagnose, target),
@@ -28,6 +28,8 @@ const bridge: LitRootBridge = {
       ipcRenderer.invoke(IPC.papersExport, projectId, paperIds, includeImages),
     copyImage: (projectId, paperId, source) =>
       ipcRenderer.invoke(IPC.papersCopyImage, projectId, paperId, source),
+    openImage: (projectId, paperId, source) =>
+      ipcRenderer.invoke(IPC.papersOpenImage, projectId, paperId, source),
     assetUrl: paperAssetUrl
   },
   notes: {
@@ -40,6 +42,15 @@ const bridge: LitRootBridge = {
     list: (projectId) => ipcRenderer.invoke(IPC.fetchList, projectId),
     cancel: (projectId, runId) => ipcRenderer.invoke(IPC.fetchCancel, projectId, runId),
     resume: (projectId, runId) => ipcRenderer.invoke(IPC.fetchResume, projectId, runId)
+  },
+  feeds: {
+    list: () => ipcRenderer.invoke(IPC.feedsList),
+    searchJournals: (request) => ipcRenderer.invoke(IPC.feedsSearchJournals, request),
+    add: (request) => ipcRenderer.invoke(IPC.feedsAdd, request),
+    remove: (subscriptionId) => ipcRenderer.invoke(IPC.feedsRemove, subscriptionId),
+    refresh: (subscriptionId) => ipcRenderer.invoke(IPC.feedsRefresh, subscriptionId),
+    items: (request) => ipcRenderer.invoke(IPC.feedsItems, request),
+    markRead: (request) => ipcRenderer.invoke(IPC.feedsMarkRead, request)
   },
   events: {
     subscribe: (listener) => {

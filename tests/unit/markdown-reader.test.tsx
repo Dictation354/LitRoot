@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { LitRootBridge } from '../../src/shared/contracts.js'
 import { FormattedTitle } from '../../src/renderer/src/FormattedTitle.js'
 import { MarkdownReader } from '../../src/renderer/src/MarkdownReader.js'
+import { transportFor } from '../renderer-transport.js'
 
 describe('safe Markdown reader', () => {
   it('adjusts and remembers font size, searches text, highlights selections and copies images', async () => {
@@ -33,18 +34,20 @@ describe('safe Markdown reader', () => {
     })
     let copiedImage = ''
     let copiedText = ''
+    const openImage = vi.fn(async (_projectId: string, _paperId: string, _source: string) => undefined)
     window.localStorage.clear()
-    window.litroot = {
+    window.litroot = transportFor({
       system: {
         copyText: async (text: string) => { copiedText = text }
       },
       papers: {
+        openImage,
         copyImage: async (_projectId: string, _paperId: string, source: string) => {
           copiedImage = source
         },
         assetUrl: (_projectId: string, _paperId: string, source: string) => `litroot-asset://paper/${source}`
       }
-    } as unknown as LitRootBridge
+    } as unknown as LitRootBridge)
     const container = document.createElement('div')
     document.body.append(container)
     const root = createRoot(container)
@@ -112,6 +115,35 @@ describe('safe Markdown reader', () => {
       const copyImage = document.body.querySelector<HTMLButtonElement>('.reader-context-menu button')
       await act(async () => { copyImage?.click() })
       expect(copiedImage).toBe('assets/figure.png')
+
+      await act(async () => {
+        image.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, clientX: window.innerWidth, clientY: window.innerHeight
+        }))
+      })
+      const menu = document.body.querySelector<HTMLElement>('.reader-context-menu')!
+      expect(Number.parseFloat(menu.style.top) + 78).toBeLessThanOrEqual(window.innerHeight - 8)
+      const openImageButton = [...menu.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === '打开大图')!
+      expect(openImageButton).toBeDefined()
+      await act(async () => { openImageButton.click() })
+      expect(openImage).toHaveBeenCalledWith(
+        'project_aaaaaaaaaaaaaaaaaaaaaaaa', 'paper_bbbbbbbbbbbbbbbbbbbbbbbb', 'assets/figure.png'
+      )
+      expect(document.body.querySelector('.reader-context-menu')).toBeNull()
+      expect(container.querySelector('[role="status"]')?.textContent).toBe('已请求系统打开图片')
+
+      openImage.mockRejectedValueOnce(new Error('No default viewer'))
+      await act(async () => {
+        image.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+      })
+      await act(async () => {
+        const button = [...document.body.querySelectorAll<HTMLButtonElement>('.reader-context-menu button')]
+          .find((item) => item.textContent === '打开大图')!
+        button.click()
+      })
+      expect(document.body.querySelector('.reader-context-menu')).toBeNull()
+      expect(container.querySelector('[role="status"]')?.textContent).toBe('打开图片失败')
     } finally {
       await act(async () => { root.unmount() })
       container.remove()

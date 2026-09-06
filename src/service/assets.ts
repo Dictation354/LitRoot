@@ -1,6 +1,5 @@
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import type { ProjectDatabase } from './project-database.js'
 import type { ProjectLayout } from './project-layout.js'
 import { candidateAssetPath } from './paper-markdown.js'
@@ -52,10 +51,9 @@ export async function readPaperAsset(
   paperId: string,
   source: string
 ): Promise<AssetPayload | null> {
-  const paper = database.get(paperId)
-  const markdownPath = database.filePath(paperId)
-  if (!paper || !markdownPath || !paper.assetPaths.includes(source)) return null
-  const candidate = candidateAssetPath(markdownPath, source)
+  const paper = database.reference(paperId)
+  if (!paper || !paper.assetPaths.includes(source)) return null
+  const candidate = candidateAssetPath(paper.filePath, source)
   if (!candidate) return null
   const canonical = await validatedImageFileInside(layout.root, candidate)
   if (!canonical) return null

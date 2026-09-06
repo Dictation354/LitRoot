@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { DependencyReport } from '../shared/contracts.js'
 import { dependencyRepair } from '../shared/dependency-repair.js'
+import { supportedNode } from '../shared/node-version.js'
 import { paperFetchCommandFromEnvironment } from './paper-fetch-command.js'
 
 interface CommandResult {
@@ -35,15 +36,6 @@ function command(executable: string, args: string[]): Promise<CommandResult> {
   })
 }
 
-function nodeSupported(version: string): boolean {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version)
-  if (!match) return false
-  const major = Number(match[1])
-  const minor = Number(match[2])
-  const patch = Number(match[3])
-  return major === 24 && (minor > 15 || (minor === 15 && patch >= 0))
-}
-
 export async function diagnoseEnvironment(
   runtimeLabel = process.env.LITROOT_RUNTIME_LABEL || '本机'
 ): Promise<DependencyReport> {
@@ -56,11 +48,11 @@ export async function diagnoseEnvironment(
   const checks: DependencyReport['checks'] = [
     {
       name: 'node',
-      ok: nodeSupported(nodeVersion),
+      ok: supportedNode(nodeVersion),
       version: nodeVersion,
       required: '24.15+',
       repairCommand: dependencyRepair.node,
-      reason: nodeSupported(nodeVersion) ? null : 'LitRoot 服务要求 Node.js 24.15 或更高的 24.x 版本。'
+      reason: supportedNode(nodeVersion) ? null : 'LitRoot 服务要求 Node.js 24.15 或更高的 24.x 版本。'
     },
     {
       name: 'paper-fetch',

@@ -2,6 +2,8 @@ const WSL_LOGIN_SHELL = '/bin/bash'
 const WSL_LOGIN_COMMAND = 'exec "$@"'
 const WSL_LOGIN_ARGV0 = 'litroot'
 
+export { supportedNode } from '../shared/node-version.js'
+
 export function wslLoginShellArgs(distribution: string, args: readonly string[]): string[] {
   if (!distribution.trim()) throw new Error('WSL distribution is required.')
   if (args.length === 0) throw new Error('WSL command is required.')
@@ -36,12 +38,4 @@ export function nodeVersionFromOutput(value: string): string | null {
     if (/^v?\d+\.\d+\.\d+(?:[-+][^\s]+)?$/.test(line)) return line
   }
   return null
-}
-
-export function supportedNode(version: string | null): boolean {
-  if (!version) return false
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version)
-  return Boolean(match && Number(match[1]) === 24 && (
-    Number(match[2]) > 15 || (Number(match[2]) === 15 && Number(match[3]) >= 0)
-  ))
 }

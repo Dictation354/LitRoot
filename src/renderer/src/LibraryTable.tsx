@@ -24,6 +24,7 @@ interface LibraryTableProps {
   onOpenWindow(paper: PaperListItem): void
   onOpenOnline(paper: PaperListItem): void
   onReveal(paper: PaperListItem): void
+  onBatchRefresh(papers: PaperListItem[], skippedCount: number): void
   onExport(paperIds: string[], includeImages: boolean): void
 }
 
@@ -51,8 +52,6 @@ const SORTABLE_COLUMNS = new Set<PaperSortField>([
   'lastOpenedAt',
   'modifiedAt'
 ])
-
-const FLEXIBLE_COLUMNS = new Set<LibraryColumnKey>(['title', 'authors', 'journal', 'doi', 'source'])
 
 function contentLabel(paper: PaperListItem): string {
   if (paper.contentKind === 'fulltext') return '全文'
@@ -101,32 +100,6 @@ function cellValue(paper: PaperListItem, key: LibraryColumnKey): React.ReactNode
   return dateLabel(paper.modifiedAt)
 }
 
-function resizeColumn(
-  event: PointerEvent<HTMLSpanElement>,
-  key: LibraryColumnKey,
-  width: number,
-  setPreferences: Dispatch<SetStateAction<LibraryPreferences>>
-): void {
-  event.preventDefault()
-  event.stopPropagation()
-  const startX = event.clientX
-  const move = (nextEvent: globalThis.PointerEvent): void => {
-    const nextWidth = Math.min(640, Math.max(64, Math.round(width + nextEvent.clientX - startX)))
-    setPreferences((current) => ({
-      ...current,
-      columns: current.columns.map((column) => (
-        column.key === key ? { ...column, width: nextWidth } : column
-      ))
-    }))
-  }
-  const finish = (): void => {
-    window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', finish)
-  }
-  window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', finish, { once: true })
-}
-
 export function LibraryTable({
   items,
   loading,
@@ -142,19 +115,96 @@ export function LibraryTable({
   onOpenWindow,
   onOpenOnline,
   onReveal,
+  onBatchRefresh,
   onExport
 }: LibraryTableProps) {
   const draggedColumn = useRef<LibraryColumnKey | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; paper: PaperListItem } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    paper: PaperListItem
+    papers: PaperListItem[]
+  } | null>(null)
+  const [resizingWidths, setResizingWidths] = useState<Partial<Record<LibraryColumnKey, number>> | null>(null)
   const visibleColumns = preferences.columns.filter((column) => column.visible)
   const gridTemplateColumns = visibleColumns.map((column) => (
-    FLEXIBLE_COLUMNS.has(column.key) ? `minmax(64px, ${column.width}fr)` : `${column.width}px`
+    resizingWidths?.[column.key] === undefined ? `${column.width}fr` : `${resizingWidths[column.key]}px`
   )).join(' ')
-  const minWidth = visibleColumns.reduce(
-    (sum, column) => sum + (FLEXIBLE_COLUMNS.has(column.key) ? 64 : column.width),
-    0
-  )
+  const totalColumnWeight = visibleColumns.reduce((sum, column) => sum + column.width, 0)
+  const smallestColumnWeight = Math.min(...visibleColumns.map((column) => column.width))
+  const minWidth = Math.ceil(totalColumnWeight * 64 / smallestColumnWeight)
   const selected = new Set(selectedPaperIds)
+
+  const beginColumnResize = (event: PointerEvent<HTMLSpanElement>, leftIndex: number): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const grid = event.currentTarget.closest<HTMLElement>('.table-grid')
+    const headers = grid ? Array.from(grid.children) as HTMLElement[] : []
+    const rightIndex = leftIndex + 1
+    if (headers.length !== visibleColumns.length || rightIndex >= visibleColumns.length) return
+
+    const initialWidths: Partial<Record<LibraryColumnKey, number>> = {}
+    for (const [index, column] of visibleColumns.entries()) {
+      const width = headers[index]?.getBoundingClientRect().width ?? 0
+      if (width <= 0) return
+      initialWidths[column.key] = width
+    }
+
+    const leftColumn = visibleColumns[leftIndex]
+    const rightColumn = visibleColumns[rightIndex]
+    if (!leftColumn || !rightColumn) return
+    const startLeftWidth = initialWidths[leftColumn.key]
+    const startRightWidth = initialWidths[rightColumn.key]
+    if (startLeftWidth === undefined || startRightWidth === undefined) return
+
+    const pairWidth = startLeftWidth + startRightWidth
+    const pairWeight = leftColumn.width + rightColumn.width
+    const minimumLeftWeight = Math.max(64, pairWeight - 640)
+    const maximumLeftWeight = Math.min(640, pairWeight - 64)
+    const minimumLeftWidth = Math.max(64, pairWidth - 640, pairWidth * minimumLeftWeight / pairWeight)
+    const maximumLeftWidth = Math.min(640, pairWidth - 64, pairWidth * maximumLeftWeight / pairWeight)
+    const startX = event.clientX
+    let latestLeftWidth = startLeftWidth
+
+    setResizingWidths(initialWidths)
+    document.body.classList.add('resizing-panes')
+
+    const move = (nextEvent: globalThis.PointerEvent): void => {
+      latestLeftWidth = Math.min(
+        maximumLeftWidth,
+        Math.max(minimumLeftWidth, startLeftWidth + nextEvent.clientX - startX)
+      )
+      setResizingWidths({
+        ...initialWidths,
+        [leftColumn.key]: latestLeftWidth,
+        [rightColumn.key]: pairWidth - latestLeftWidth
+      })
+    }
+
+    const finish = (): void => {
+      const nextLeftWeight = Math.min(
+        maximumLeftWeight,
+        Math.max(minimumLeftWeight, Math.round(pairWeight * latestLeftWidth / pairWidth))
+      )
+      setPreferences((current) => ({
+        ...current,
+        columns: current.columns.map((column) => {
+          if (column.key === leftColumn.key) return { ...column, width: nextLeftWeight }
+          if (column.key === rightColumn.key) return { ...column, width: pairWeight - nextLeftWeight }
+          return column
+        })
+      }))
+      setResizingWidths(null)
+      document.body.classList.remove('resizing-panes')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish, { once: true })
+    window.addEventListener('pointercancel', finish, { once: true })
+  }
 
   useEffect(() => {
     if (!contextMenu) return
@@ -203,10 +253,14 @@ export function LibraryTable({
     event.preventDefault()
     if (!selected.has(paper.id)) onSelectionChange([paper.id], paper.id, paper.id)
     else onSelectionChange(selectedPaperIds, paper.id, selectionAnchorId || paper.id)
+    const contextPapers = selected.has(paper.id)
+      ? items.filter((item) => selected.has(item.id))
+      : [paper]
     setContextMenu({
       x: Math.min(event.clientX, Math.max(8, window.innerWidth - 224)),
-      y: Math.min(event.clientY, Math.max(8, window.innerHeight - 250)),
-      paper
+      y: Math.min(event.clientY, Math.max(8, window.innerHeight - 286)),
+      paper,
+      papers: contextPapers
     })
   }
 
@@ -246,9 +300,10 @@ export function LibraryTable({
         <div className="library-table" role="table" style={{ minWidth }} aria-label="文献列表">
           <div className="table-header" role="rowgroup">
             <div className="table-grid" role="row" style={{ gridTemplateColumns }}>
-              {visibleColumns.map((column) => {
+              {visibleColumns.map((column, index) => {
                 const sortable = SORTABLE_COLUMNS.has(column.key as PaperSortField)
                 const active = preferences.sortBy === column.key
+                const rightColumn = visibleColumns[index + 1]
                 return (
                   <div
                     className={`table-column-header ${active ? 'sorted' : ''}`}
@@ -269,12 +324,14 @@ export function LibraryTable({
                         <span className={`sort-arrow ${preferences.sortDirection}`} aria-label={preferences.sortDirection === 'asc' ? '升序' : '降序'} />
                       )}
                     </button>
-                    <span
-                      className="column-resizer"
-                      onPointerDown={(event) => resizeColumn(event, column.key, column.width, setPreferences)}
-                      role="separator"
-                      aria-label={`调整${COLUMN_LABELS[column.key]}列宽`}
-                    />
+                    {rightColumn && (
+                      <span
+                        className="column-resizer"
+                        onPointerDown={(event) => beginColumnResize(event, index)}
+                        role="separator"
+                        aria-label={`调整${COLUMN_LABELS[column.key]}与${COLUMN_LABELS[rightColumn.key]}列宽`}
+                      />
+                    )}
                   </div>
                 )
               })}
@@ -367,6 +424,11 @@ export function LibraryTable({
               onClick={() => contextAction(() => onOpenOnline(contextMenu.paper))}
             >在线查看</button>
             <button type="button" role="menuitem" onClick={() => contextAction(() => onReveal(contextMenu.paper))}>打开文件目录</button>
+            <span className="paper-context-separator" role="separator" />
+            <button type="button" role="menuitem" onClick={() => contextAction(() => {
+              const refreshable = contextMenu.papers.filter((paper) => Boolean(paper.doi))
+              onBatchRefresh(refreshable, contextMenu.papers.length - refreshable.length)
+            })}>批量刷新</button>
             <span className="paper-context-separator" role="separator" />
             <button type="button" role="menuitem" onClick={() => contextAction(() => onExport(selectedPaperIds.length > 0 ? selectedPaperIds : [contextMenu.paper.id], false))}>导出文件（仅文本）</button>
             <button type="button" role="menuitem" onClick={() => contextAction(() => onExport(selectedPaperIds.length > 0 ? selectedPaperIds : [contextMenu.paper.id], true))}>导出文件（文本 + 图片）</button>

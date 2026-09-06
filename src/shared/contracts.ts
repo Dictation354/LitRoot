@@ -291,6 +291,7 @@ export const fetchRunSchema = z.object({
   state: fetchRunStateSchema,
   concurrency: z.number().int().min(1).max(8),
   refreshPaperId: z.string().nullable(),
+  refreshPaperIds: z.array(z.string()).min(1).max(50).nullable().default(null),
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
@@ -304,7 +305,30 @@ export const createFetchRunRequestSchema = z.object({
   projectId: z.string(),
   inputs: z.array(z.string().trim().min(1).max(4_000)).min(1).max(50),
   concurrency: z.number().int().min(1).max(8).default(4),
-  refreshPaperId: z.string().optional()
+  refreshPaperId: z.string().optional(),
+  refreshPaperIds: z.array(z.string()).min(1).max(50).optional()
+}).superRefine((request, context) => {
+  if (request.refreshPaperId && request.refreshPaperIds) {
+    context.addIssue({
+      code: 'custom',
+      message: '不能同时提交单篇和批量刷新目标。',
+      path: ['refreshPaperIds']
+    })
+  }
+  if (request.refreshPaperIds && request.refreshPaperIds.length !== request.inputs.length) {
+    context.addIssue({
+      code: 'custom',
+      message: '批量刷新目标必须与输入逐项对应。',
+      path: ['refreshPaperIds']
+    })
+  }
+  if (request.refreshPaperIds && new Set(request.refreshPaperIds).size !== request.refreshPaperIds.length) {
+    context.addIssue({
+      code: 'custom',
+      message: '批量刷新目标不能重复。',
+      path: ['refreshPaperIds']
+    })
+  }
 })
 export type CreateFetchRunRequest = z.input<typeof createFetchRunRequestSchema>
 
@@ -324,7 +348,84 @@ export const dependencyReportSchema = z.object({
 })
 export type DependencyReport = z.infer<typeof dependencyReportSchema>
 
+export const feedSubscriptionSchema = z.object({
+  id: z.string(),
+  issn: z.string(),
+  title: z.string(),
+  unreadCount: z.number().int().nonnegative(),
+  lastCheckedAt: z.string().nullable(),
+  lastSuccessfulAt: z.string().nullable(),
+  error: z.string().nullable()
+})
+export type FeedSubscription = z.infer<typeof feedSubscriptionSchema>
+
+export const feedItemSchema = z.object({
+  id: z.string(),
+  subscriptionId: z.string(),
+  sourceTitle: z.string(),
+  title: z.string(),
+  authors: z.array(z.string()),
+  summary: z.string(),
+  doi: z.string(),
+  url: z.string(),
+  publishedAt: z.string().nullable(),
+  discoveredAt: z.string(),
+  readAt: z.string().nullable()
+})
+export type FeedItem = z.infer<typeof feedItemSchema>
+
+export const feedItemsRequestSchema = z.object({
+  subscriptionId: z.string().regex(/^feed_[a-f0-9]{24}$/).nullable().default(null),
+  days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(14), z.literal(30)]).default(7),
+  limit: z.number().int().min(1).max(100).default(50),
+  offset: z.number().int().nonnegative().default(0)
+})
+export type FeedItemsRequest = z.input<typeof feedItemsRequestSchema>
+
+export const feedItemsResultSchema = z.object({
+  items: z.array(feedItemSchema),
+  total: z.number().int().nonnegative()
+})
+export type FeedItemsResult = z.infer<typeof feedItemsResultSchema>
+
+export const addFeedRequestSchema = z.object({
+  issn: z.string().trim().regex(/^\d{4}-?\d{3}[\dXx]$/),
+  title: z.string().trim().max(200).optional()
+})
+export type AddFeedRequest = z.input<typeof addFeedRequestSchema>
+
+const issnSchema = z.string().regex(/^\d{4}-\d{3}[\dX]$/)
+
+export const journalSearchRequestSchema = z.object({
+  query: z.string().trim().min(1).max(500)
+})
+export type JournalSearchRequest = z.input<typeof journalSearchRequestSchema>
+
+export const journalCandidateSchema = z.object({
+  displayName: z.string(),
+  publisher: z.string().nullable(),
+  issn: issnSchema,
+  issns: z.array(issnSchema)
+})
+export type JournalCandidate = z.infer<typeof journalCandidateSchema>
+
+export const journalSearchResultSchema = z.object({
+  candidates: z.array(journalCandidateSchema).max(10)
+})
+export type JournalSearchResult = z.infer<typeof journalSearchResultSchema>
+
+export const markFeedReadRequestSchema = z.object({
+  itemIds: z.array(z.string().regex(/^feeditem_[a-f0-9]{24}$/)).max(50).optional(),
+  subscriptionId: z.string().regex(/^feed_[a-f0-9]{24}$/).nullable().optional(),
+  allUnread: z.boolean().optional(),
+  read: z.boolean()
+}).refine((value) => Boolean(value.itemIds?.length || value.allUnread), {
+  message: '必须指定条目或全部未读。'
+})
+export type MarkFeedReadRequest = z.infer<typeof markFeedReadRequestSchema>
+
 export const serviceEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('feeds.changed'), at: z.string() }),
   z.object({ type: z.literal('scan.started'), projectId: z.string(), at: z.string() }),
   z.object({
     type: z.literal('scan.completed'),
@@ -359,6 +460,16 @@ export const apiErrorSchema = z.object({
 })
 export type ApiErrorBody = z.infer<typeof apiErrorSchema>
 
+export interface BridgeErrorPayload {
+  code: string
+  message: string
+  details?: unknown
+}
+
+export type BridgeResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: BridgeErrorPayload }
+
 export interface LitRootBridge {
   system: {
     listRuntimes(): Promise<RuntimeOption[]>
@@ -382,6 +493,7 @@ export interface LitRootBridge {
     reveal(projectId: string, paperId: string): Promise<void>
     export(projectId: string, paperIds: string[], includeImages: boolean): Promise<PaperExportResult | null>
     copyImage(projectId: string, paperId: string, source: string): Promise<void>
+    openImage(projectId: string, paperId: string, source: string): Promise<void>
     assetUrl(projectId: string, paperId: string, source: string): string
   }
   notes: {
@@ -395,9 +507,36 @@ export interface LitRootBridge {
     cancel(projectId: string, runId: string): Promise<FetchRun>
     resume(projectId: string, runId: string): Promise<FetchRun>
   }
+  feeds: {
+    list(): Promise<FeedSubscription[]>
+    searchJournals(request: JournalSearchRequest): Promise<JournalSearchResult>
+    add(request: AddFeedRequest): Promise<FeedSubscription>
+    remove(subscriptionId: string): Promise<void>
+    refresh(subscriptionId: string): Promise<FeedSubscription>
+    items(request: FeedItemsRequest): Promise<FeedItemsResult>
+    markRead(request: MarkFeedReadRequest): Promise<void>
+  }
   events: {
     subscribe(listener: (event: ServiceEvent) => void): () => void
   }
+}
+
+type TransportMethod<T> = T extends (...args: infer Args) => Promise<infer Result>
+  ? (...args: Args) => Promise<BridgeResult<Result extends void ? null : Result>>
+  : T
+
+type TransportSection<T> = {
+  [Key in keyof T]: TransportMethod<T[Key]>
+}
+
+export interface LitRootTransportBridge {
+  system: TransportSection<LitRootBridge['system']>
+  projects: TransportSection<LitRootBridge['projects']>
+  papers: TransportSection<LitRootBridge['papers']>
+  notes: TransportSection<LitRootBridge['notes']>
+  fetch: TransportSection<LitRootBridge['fetch']>
+  feeds: TransportSection<LitRootBridge['feeds']>
+  events: TransportSection<LitRootBridge['events']>
 }
 
 export const IPC = {
@@ -418,6 +557,7 @@ export const IPC = {
   papersReveal: 'litroot:papers:reveal',
   papersExport: 'litroot:papers:export',
   papersCopyImage: 'litroot:papers:copy-image',
+  papersOpenImage: 'litroot:papers:open-image',
   notesRead: 'litroot:notes:read',
   notesWrite: 'litroot:notes:write',
   fetchCreate: 'litroot:fetch:create',
@@ -425,5 +565,12 @@ export const IPC = {
   fetchList: 'litroot:fetch:list',
   fetchCancel: 'litroot:fetch:cancel',
   fetchResume: 'litroot:fetch:resume',
+  feedsList: 'litroot:feeds:list',
+  feedsSearchJournals: 'litroot:feeds:search-journals',
+  feedsAdd: 'litroot:feeds:add',
+  feedsRemove: 'litroot:feeds:remove',
+  feedsRefresh: 'litroot:feeds:refresh',
+  feedsItems: 'litroot:feeds:items',
+  feedsMarkRead: 'litroot:feeds:mark-read',
   eventsPush: 'litroot:events:push'
 } as const

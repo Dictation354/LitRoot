@@ -10,6 +10,8 @@ export class ProjectWatcher {
   private watcher: FSWatcher | null = null
   private scanTimer: NodeJS.Timeout | null = null
   private noteTimer: NodeJS.Timeout | null = null
+  private readonly pendingNotePaths = new Set<string>()
+  private readonly noteTasks = new Set<Promise<void>>()
 
   constructor(
     private readonly layout: ProjectLayout,
@@ -47,11 +49,19 @@ export class ProjectWatcher {
   }
 
   private scheduleNote(path: string): void {
+    this.pendingNotePaths.add(path)
     if (this.noteTimer) clearTimeout(this.noteTimer)
     this.noteTimer = setTimeout(() => {
       this.noteTimer = null
-      void this.emitNote(path)
+      const paths = [...this.pendingNotePaths]
+      this.pendingNotePaths.clear()
+      const task = this.emitNotes(paths).finally(() => this.noteTasks.delete(task))
+      this.noteTasks.add(task)
     }, 300)
+  }
+
+  private async emitNotes(paths: string[]): Promise<void> {
+    for (const path of paths) await this.emitNote(path)
   }
 
   private async emitNote(path: string): Promise<void> {
@@ -80,8 +90,10 @@ export class ProjectWatcher {
     if (this.noteTimer) clearTimeout(this.noteTimer)
     this.scanTimer = null
     this.noteTimer = null
+    this.pendingNotePaths.clear()
     const watcher = this.watcher
     this.watcher = null
     await watcher?.close()
+    await Promise.all([...this.noteTasks])
   }
 }

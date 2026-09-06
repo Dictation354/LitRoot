@@ -1,8 +1,8 @@
-import type { LitRootBridge } from '../../shared/contracts'
+import type { LitRootTransportBridge } from '../../shared/contracts'
 
 declare global {
   interface Window {
-    litroot?: LitRootBridge
+    litroot?: LitRootTransportBridge
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DependencyReport, ProjectSummary, RuntimeOption } from '../../shared/contracts'
 import { bridge, errorMessage } from './bridge'
 
@@ -16,21 +16,32 @@ export function ProjectDialog({ open, onClose, onAdded }: ProjectDialogProps) {
   const [report, setReport] = useState<DependencyReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const pickRequest = useRef(0)
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
     setMessage('')
     void bridge().system.listRuntimes().then((items) => {
+      if (cancelled) return
       setRuntimes(items)
       setRuntimeKey((current) => items.some((item) => item.key === current) ? current : items[0]?.key ?? '')
-    }).catch((error) => setMessage(errorMessage(error)))
+    }).catch((error) => { if (!cancelled) setMessage(errorMessage(error)) })
+    return () => { cancelled = true; pickRequest.current += 1 }
   }, [open])
 
   useEffect(() => {
     const runtime = runtimes.find((item) => item.key === runtimeKey)
     if (!open || !runtime) return
+    let cancelled = false
     setReport(null)
-    void bridge().system.diagnose(runtime.target).then(setReport).catch((error) => setMessage(errorMessage(error)))
+    void bridge().system.diagnose(runtime.target).then((next) => {
+      if (!cancelled) setReport(next)
+    }).catch((error) => { if (!cancelled) setMessage(errorMessage(error)) })
+    return () => { cancelled = true }
   }, [open, runtimeKey, runtimes])
 
   if (!open) return null
@@ -38,17 +49,19 @@ export function ProjectDialog({ open, onClose, onAdded }: ProjectDialogProps) {
   const nodeReady = report?.checks.find((check) => check.name === 'node')?.ok === true
 
   const add = async (): Promise<void> => {
+    const request = ++pickRequest.current
     setLoading(true)
     setMessage('')
     try {
       if (!runtime) return
       const project = await bridge().projects.add(runtime.target, path, name.trim() || undefined)
+      if (request !== pickRequest.current) return
       onAdded(project)
       onClose()
     } catch (error) {
-      setMessage(errorMessage(error))
+      if (request === pickRequest.current) setMessage(errorMessage(error))
     } finally {
-      setLoading(false)
+      if (request === pickRequest.current) setLoading(false)
     }
   }
 
@@ -66,6 +79,7 @@ export function ProjectDialog({ open, onClose, onAdded }: ProjectDialogProps) {
           <label className="field">
             <span className="field-label">运行环境</span>
             <select value={runtimeKey} onChange={(event) => {
+              pickRequest.current += 1
               setRuntimeKey(event.target.value)
               setPath('')
             }}>
@@ -97,8 +111,9 @@ export function ProjectDialog({ open, onClose, onAdded }: ProjectDialogProps) {
               />
               <button type="button" onClick={async () => {
                 if (!runtime) return
+                const request = ++pickRequest.current
                 const selected = await bridge().system.pickProjectPath(runtime.target)
-                if (selected) setPath(selected)
+                if (request === pickRequest.current && selected) setPath(selected)
               }} disabled={!runtime}>浏览</button>
             </div>
           </label>

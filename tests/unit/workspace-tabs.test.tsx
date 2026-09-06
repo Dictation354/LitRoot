@@ -2,14 +2,16 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   LitRootBridge,
   PaperDetail,
   PaperSearchRequest,
-  ProjectSummary
+  ProjectSummary,
+  ServiceEvent
 } from '../../src/shared/contracts.js'
 import App from '../../src/renderer/src/App.js'
+import { transportFor } from '../renderer-transport.js'
 
 const PROJECT_ONE = 'project_aaaaaaaaaaaaaaaaaaaaaaaa'
 const PROJECT_TWO = 'project_bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -80,6 +82,14 @@ const secondPaper = paper(PAPER_TWO, 'Beta paper', 2025)
 const thirdPaper = paper(PAPER_THREE, 'Gamma paper', 2024)
 const requests: PaperSearchRequest[] = []
 const exports: string[][] = []
+const listProjects = vi.fn(async (): Promise<ProjectSummary[]> => projects)
+const getPaper = vi.fn(async (projectId: string, paperId: string): Promise<PaperDetail | null> => {
+  if (projectId === PROJECT_ONE && paperId === PAPER_ONE) return firstPaper
+  if (projectId === PROJECT_ONE && paperId === PAPER_THREE) return thirdPaper
+  if (projectId === PROJECT_TWO && paperId === PAPER_TWO) return secondPaper
+  return null
+})
+let eventListener: ((event: ServiceEvent) => void) | null = null
 let container: HTMLDivElement
 let root: Root
 
@@ -94,7 +104,7 @@ function bridgeMock(): LitRootBridge {
       copyText: async () => undefined
     },
     projects: {
-      list: async () => projects,
+      list: listProjects,
       add: unused,
       remove: async () => undefined,
       scan: unused
@@ -105,12 +115,7 @@ function bridgeMock(): LitRootBridge {
         const items = request.projectId === PROJECT_ONE ? [firstPaper, thirdPaper] : [secondPaper]
         return { items, total: items.length, years: [items[0]?.year ?? 2025] }
       },
-      get: async (projectId, paperId) => {
-        if (projectId === PROJECT_ONE && paperId === PAPER_ONE) return firstPaper
-        if (projectId === PROJECT_ONE && paperId === PAPER_THREE) return thirdPaper
-        if (projectId === PROJECT_TWO && paperId === PAPER_TWO) return secondPaper
-        return null
-      },
+      get: getPaper,
       updateMetadata: unused,
       markOpened: async () => '2026-08-29T00:00:00.000Z',
       openWindow: async () => undefined,
@@ -120,6 +125,7 @@ function bridgeMock(): LitRootBridge {
         return { papers: paperIds.length, images: 0, files: paperIds.length, failures: [] }
       },
       copyImage: async () => undefined,
+      openImage: async () => undefined,
       assetUrl: (_projectId, paperId, source) => `litroot-asset://${paperId}/${source}`
     },
     notes: { read: unused, write: unused },
@@ -130,7 +136,21 @@ function bridgeMock(): LitRootBridge {
       cancel: unused,
       resume: unused
     },
-    events: { subscribe: () => () => undefined }
+    feeds: {
+      list: async () => [],
+      searchJournals: unused,
+      add: unused,
+      remove: unused,
+      refresh: unused,
+      items: async () => ({ items: [], total: 0 }),
+      markRead: async () => undefined
+    },
+    events: {
+      subscribe: (listener) => {
+        eventListener = listener
+        return () => { eventListener = null }
+      }
+    }
   }
 }
 
@@ -146,10 +166,14 @@ async function waitFor<T>(read: () => T | null | undefined | false): Promise<T> 
 beforeEach(async () => {
   requests.length = 0
   exports.length = 0
+  listProjects.mockClear()
+  listProjects.mockImplementation(async () => projects)
+  getPaper.mockClear()
+  eventListener = null
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1480 })
   window.localStorage.clear()
   window.localStorage.setItem('litroot.current-project', PROJECT_ONE)
-  window.litroot = bridgeMock()
+  window.litroot = transportFor(bridgeMock())
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -157,6 +181,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   await act(async () => { root.unmount() })
   container.remove()
   window.localStorage.clear()
@@ -164,6 +189,57 @@ afterEach(async () => {
 })
 
 describe('workspace tabs', () => {
+  it('shows the inspector only in paper reader tabs and does not load details on selection', async () => {
+    const firstRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_ONE}"]`))
+    const thirdRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_THREE}"]`))
+
+    expect(container.querySelector('.library-main')).not.toBeNull()
+    expect(firstRow.getAttribute('aria-selected')).toBe('true')
+    expect(container.querySelector('.inspector-panel')).toBeNull()
+    expect(container.querySelector('.inspector-resizer')).toBeNull()
+    expect(getPaper).not.toHaveBeenCalled()
+
+    await act(async () => { thirdRow.click() })
+    expect(thirdRow.getAttribute('aria-selected')).toBe('true')
+    expect(getPaper).not.toHaveBeenCalled()
+
+    await act(async () => {
+      thirdRow.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    })
+    await waitFor(() => container.querySelector('.reader-header h1')?.textContent === 'Gamma paper')
+    expect(container.querySelector('.inspector-panel')).not.toBeNull()
+    expect(container.querySelector('.inspector-resizer')).not.toBeNull()
+    expect(getPaper).toHaveBeenCalledWith(PROJECT_ONE, PAPER_THREE)
+
+    const homeTab = container.querySelector<HTMLButtonElement>('.home-tab')
+    await act(async () => { homeTab?.click() })
+    await waitFor(() => container.querySelector('.library-main'))
+    expect(container.querySelector('.inspector-panel')).toBeNull()
+    expect(container.querySelector('.inspector-resizer')).toBeNull()
+    expect(container.querySelector(`[data-paper-id="${PAPER_ONE}"]`)).not.toBeNull()
+  })
+
+  it('keeps scanning projects selectable while recovering a missed completion event', async () => {
+    const recent = await waitFor(() => container.querySelector<HTMLButtonElement>('.feed-sidebar-entry'))
+    await act(async () => { recent.click() })
+    const target = await waitFor(() => container.querySelector<HTMLSelectElement>('select[aria-label="目标项目"]'))
+    expect(target.textContent).toContain('Project One')
+
+    vi.useFakeTimers()
+    await act(async () => {
+      eventListener?.({ type: 'scan.started', projectId: PROJECT_ONE, at: new Date().toISOString() })
+      eventListener?.({ type: 'scan.started', projectId: PROJECT_TWO, at: new Date().toISOString() })
+    })
+    expect(target.textContent).toContain('Project One')
+    expect(target.textContent).toContain('Project Two')
+    listProjects.mockClear()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+
+    expect(listProjects).toHaveBeenCalledOnce()
+    expect(target.textContent).toContain('Project One')
+  })
+
   it('opens unique paper tabs and keeps them while switching projects', async () => {
     const firstRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_ONE}"]`))
     await act(async () => { firstRow.click() })
@@ -211,6 +287,85 @@ describe('workspace tabs', () => {
     expect(requests.at(-1)).toMatchObject({ sortBy: 'title', sortDirection: 'desc', offset: 0 })
   })
 
+  it('resizes only the two columns beside an internal divider', async () => {
+    const headers = await waitFor(() => {
+      const values = [...container.querySelectorAll<HTMLElement>('.table-column-header')]
+      return values.length === 6 ? values : null
+    })
+    const widths = [380, 220, 84, 220, 150, 150]
+    headers.forEach((header, index) => {
+      header.getBoundingClientRect = () => ({
+        bottom: 34,
+        height: 34,
+        left: widths.slice(0, index).reduce((sum, width) => sum + width, 0),
+        right: widths.slice(0, index + 1).reduce((sum, width) => sum + width, 0),
+        top: 0,
+        width: widths[index],
+        x: 0,
+        y: 0,
+        toJSON: () => undefined
+      })
+    })
+
+    const resizers = container.querySelectorAll<HTMLElement>('.column-resizer')
+    expect(resizers).toHaveLength(headers.length - 1)
+    expect(headers.at(-1)?.querySelector('.column-resizer')).toBeNull()
+
+    await act(async () => {
+      resizers[0]?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100 }))
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 140 }))
+    })
+
+    const resizingTracks = container.querySelector<HTMLElement>('.table-grid')?.style.gridTemplateColumns
+    expect(resizingTracks).toBe('420px 180px 84px 220px 150px 150px')
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent('pointerup', { clientX: 140 }))
+    })
+    const stored = JSON.parse(window.localStorage.getItem('litroot.library-preferences.v1') ?? '{}')
+    expect(stored.columns.slice(0, 3)).toMatchObject([
+      { key: 'title', width: 420 },
+      { key: 'authors', width: 180 },
+      { key: 'year', width: 84 }
+    ])
+    expect(stored.columns[0].width + stored.columns[1].width).toBe(600)
+    expect(document.body.classList.contains('resizing-panes')).toBe(false)
+  })
+
+  it('stops an internal column divider when either adjacent column reaches its minimum', async () => {
+    const headers = await waitFor(() => {
+      const values = [...container.querySelectorAll<HTMLElement>('.table-column-header')]
+      return values.length === 6 ? values : null
+    })
+    const widths = [380, 220, 84, 220, 150, 150]
+    headers.forEach((header, index) => {
+      header.getBoundingClientRect = () => ({
+        bottom: 34,
+        height: 34,
+        left: 0,
+        right: widths[index],
+        top: 0,
+        width: widths[index],
+        x: 0,
+        y: 0,
+        toJSON: () => undefined
+      })
+    })
+
+    const firstResizer = container.querySelector<HTMLElement>('.column-resizer')
+    await act(async () => {
+      firstResizer?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100 }))
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: -1000 }))
+    })
+    expect(container.querySelector<HTMLElement>('.table-grid')?.style.gridTemplateColumns)
+      .toBe('64px 536px 84px 220px 150px 150px')
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent('pointercancel'))
+    })
+    expect(document.body.classList.contains('resizing-panes')).toBe(false)
+  })
+
   it('opens the project menu outside the scrolling sidebar and persists keyboard resizing', async () => {
     const menuButton = await waitFor(() => container.querySelector<HTMLButtonElement>('.project-menu-trigger'))
     await act(async () => { menuButton.click() })
@@ -242,7 +397,7 @@ describe('workspace tabs', () => {
     })
     expect(firstRow.getAttribute('aria-selected')).toBe('true')
     expect(thirdRow.getAttribute('aria-selected')).toBe('true')
-    expect(thirdRow.style.gridTemplateColumns).toContain('minmax(64px')
+    expect(thirdRow.style.gridTemplateColumns).toContain('fr')
     expect(container.textContent).toContain('添加日期')
     expect(container.textContent).toContain('最后打开日期')
 

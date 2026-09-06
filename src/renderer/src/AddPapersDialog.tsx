@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FetchRun, ProjectSummary, ServiceEvent } from '../../shared/contracts'
 import { parseBatchInput } from '../../shared/batch-input'
 import { bridge, errorMessage } from './bridge'
@@ -8,7 +8,12 @@ interface AddPapersDialogProps {
   open: boolean
   project: ProjectSummary
   event: ServiceEvent | null
-  refresh?: { paperId: string; query: string } | null
+  refresh?: {
+    targets: Array<{ paperId: string; query: string }>
+    batch: boolean
+    skippedCount: number
+  } | null
+  focusRunId?: string | null
   onClose(): void
   onOpenPaper(paperId: string): void
 }
@@ -29,6 +34,7 @@ export function AddPapersDialog({
   project,
   event,
   refresh,
+  focusRunId,
   onClose,
   onOpenPaper
 }: AddPapersDialogProps) {
@@ -38,6 +44,7 @@ export function AddPapersDialog({
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const createRequest = useRef(0)
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
@@ -46,23 +53,36 @@ export function AddPapersDialog({
 
   useEffect(() => {
     if (!open) return
+    let cancelled = false
     setMessage('')
-    if (refresh) setInput(refresh.query)
+    if (refresh) setInput(refresh.targets.map((target) => target.query).join('\n'))
     void bridge().fetch.list(project.id).then((items) => {
+      if (cancelled) return
       setRuns(items)
       setSelectedRunId((current) => current ?? items[0]?.id ?? null)
-    }).catch((error) => setMessage(errorMessage(error)))
+    }).catch((error) => { if (!cancelled) setMessage(errorMessage(error)) })
+    return () => { cancelled = true }
   }, [open, project.id, refresh])
 
   useEffect(() => {
-    if (event?.type !== 'fetch.changed' || event.projectId !== project.id) return
+    if (!open) setSubmitting(false)
+    return () => { createRequest.current += 1 }
+  }, [open, project.id])
+
+  useEffect(() => {
+    if (open && focusRunId) setSelectedRunId(focusRunId)
+  }, [focusRunId, open])
+
+  useEffect(() => {
+    if (!open || event?.type !== 'fetch.changed' || event.projectId !== project.id) return
     setRuns((current) => [event.run, ...current.filter((run) => run.id !== event.run.id)])
     setSelectedRunId((current) => current ?? event.run.id)
-  }, [event, project.id])
+  }, [event, open, project.id])
 
   if (!open) return null
 
   const create = async (overrideInput?: string): Promise<void> => {
+    const request = ++createRequest.current
     setSubmitting(true)
     setMessage('')
     try {
@@ -71,15 +91,20 @@ export function AddPapersDialog({
         projectId: project.id,
         inputs: parsed.inputs,
         concurrency,
-        ...(refresh && !overrideInput ? { refreshPaperId: refresh.paperId } : {})
+        ...(refresh && !overrideInput
+          ? refresh.batch
+            ? { refreshPaperIds: refresh.targets.map((target) => target.paperId) }
+            : { refreshPaperId: refresh.targets[0]?.paperId }
+          : {})
       })
+      if (request !== createRequest.current) return
       setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)])
       setSelectedRunId(run.id)
       if (!overrideInput && !refresh) setInput('')
     } catch (error) {
-      setMessage(errorMessage(error))
+      if (request === createRequest.current) setMessage(errorMessage(error))
     } finally {
-      setSubmitting(false)
+      if (request === createRequest.current) setSubmitting(false)
     }
   }
 
@@ -94,9 +119,12 @@ export function AddPapersDialog({
         <header className="modal-header">
           <div>
             <span className="eyebrow">{project.name}</span>
-            <h2 id="fetch-title">{refresh ? '安全刷新文献' : '添加文献'}</h2>
+            <h2 id="fetch-title">{refresh?.batch ? '批量刷新文献' : refresh ? '安全刷新文献' : '添加文献'}</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button>
+          <button type="button" className="icon-button" onClick={() => {
+            if (refresh) setInput('')
+            onClose()
+          }} aria-label="关闭">×</button>
         </header>
         <div className="fetch-layout">
           <div className="fetch-create">
@@ -119,8 +147,11 @@ export function AddPapersDialog({
             <p className="muted">
               固定归档完整正文、全部参考文献与正文图片。每项独立验收，单项失败不会中止其余任务。
             </p>
+            {refresh?.batch && refresh.skippedCount > 0 && (
+              <p className="form-message">已跳过 {refresh.skippedCount} 篇缺少 DOI 的文献。</p>
+            )}
             <button type="button" className="primary-button full" disabled={submitting || !input.trim()} onClick={() => void create()}>
-              {submitting ? '正在创建…' : refresh ? '开始安全刷新' : '开始添加'}
+              {submitting ? '正在创建…' : refresh?.batch ? '开始批量刷新' : refresh ? '开始安全刷新' : '开始添加'}
             </button>
             {message && <p className="form-message status-error">{message}</p>}
             {runs.length > 0 && (

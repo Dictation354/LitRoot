@@ -7,6 +7,7 @@ React renderer
   │ narrow Electron IPC (Zod validation)
   ▼
 Electron main on Windows / Linux / macOS
+  ├── global feeds.sqlite3 + bounded Crossref journal refresher
   │ authenticated HTTP/SSE over random localhost port
   ▼
 single-file service
@@ -21,6 +22,8 @@ single-file service
 ```
 
 The renderer never receives a session token, raw filesystem handle, or process primitive. Asset URLs contain only a project ID, paper ID, and Markdown-relative source. Electron authenticates the matching runtime request; the service checks the paper reference and canonical realpath again. Native projects use host paths directly, while WSL projects cross the host boundary only through validated `wslpath` conversions.
+
+Journal Radar forms a separate application-level trust boundary. Electron main connects only to `api.crossref.org`, identifies LitRoot and its maintainer in the User-Agent, and limits request duration and response size. Crossref JSON is validated with Zod; JATS/HTML abstracts are reduced to bounded plain text. ISSN subscriptions and 90-day temporary works live only in `feeds.sqlite3` under Electron `userData`. Crossref `created` time drives recent-work ranges and DOI uniqueness preserves read state during refresh. The renderer receives this data through validated IPC and has no Crossref network or database access.
 
 Native Windows resolves the official `paper-fetch.cmd` installation to its private Python executable and fixed module prefix. Linux and macOS resolve the executable from the user's login shell. Fetch queries remain direct subprocess arguments with `shell=false`; only WSL uses the fixed `exec "$@"` login-shell trampoline.
 

@@ -3,6 +3,10 @@ import { join, posix } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type {
   CreateFetchRunRequest,
+  AddFeedRequest,
+  FeedItemsRequest,
+  JournalSearchRequest,
+  MarkFeedReadRequest,
   MetadataUpdateRequest,
   NoteReadRequest,
   NoteWriteRequest,
@@ -15,6 +19,7 @@ import type {
 import { runtimeTargetKey, runtimeTargetSchema } from '../shared/contracts.js'
 import { atomicWriteFile } from '../service/safe-fs.js'
 import { ServiceRuntimeManager } from './wsl-manager.js'
+import { FeedService } from './feed-service.js'
 
 interface ConnectionRecord {
   projectId: string
@@ -56,11 +61,15 @@ export function parseConnections(value: unknown): ConnectionRecord[] {
 
 export class AppController {
   readonly runtimes: ServiceRuntimeManager
+  readonly feeds: FeedService
   private readonly connectionsPath = join(app.getPath('userData'), 'projects.json')
   private connections: ConnectionRecord[] = []
 
   constructor(onEvent: (event: ServiceEvent) => void) {
     this.runtimes = new ServiceRuntimeManager(onEvent)
+    this.feeds = new FeedService(join(app.getPath('userData'), 'feeds.sqlite3'), () => {
+      onEvent({ type: 'feeds.changed', at: new Date().toISOString() })
+    })
   }
 
   async start(): Promise<void> {
@@ -69,6 +78,7 @@ export class AppController {
     } catch {
       this.connections = []
     }
+    this.feeds.start()
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
@@ -80,15 +90,14 @@ export class AppController {
         connection
       ])
     }
-    const summaries: ProjectSummary[] = []
-    for (const connections of grouped.values()) {
+    const summaries = (await Promise.all([...grouped.values()].map(async (connections) => {
       const runtime = connections[0]!.runtime
       try {
         const client = await this.runtimes.client(runtime)
         const remote = new Map((await client.listProjects()).map((project) => [project.id, project]))
-        for (const connection of connections) {
+        return connections.map((connection): ProjectSummary => {
           const project = remote.get(connection.projectId)
-          summaries.push(project
+          return project
             ? { ...project, runtime }
             : {
                 id: connection.projectId,
@@ -101,11 +110,10 @@ export class AppController {
                 issueCount: 0,
                 years: [],
                 lastScannedAt: null
-              })
-        }
+              }
+        })
       } catch (error) {
-        for (const connection of connections) {
-          summaries.push({
+        return connections.map((connection): ProjectSummary => ({
             id: connection.projectId,
             name: connection.name,
             path: connection.path,
@@ -116,10 +124,9 @@ export class AppController {
             issueCount: 0,
             years: [],
             lastScannedAt: null
-          })
-        }
+          }))
       }
-    }
+    }))).flat()
     return summaries.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
   }
 
@@ -139,7 +146,15 @@ export class AppController {
 
   async removeProject(projectId: string): Promise<void> {
     const connection = this.connection(projectId)
-    await (await this.runtimes.client(connection.runtime)).removeProject(projectId)
+    try {
+      await (await this.runtimes.client(connection.runtime)).removeProject(projectId)
+    } catch (error) {
+      if (connection.runtime.kind === 'local') throw error
+      const runtimeKey = runtimeTargetKey(connection.runtime)
+      const runtimeAvailable = (await this.runtimes.listRuntimes())
+        .some((option) => option.key === runtimeKey)
+      if (runtimeAvailable) throw error
+    }
     this.connections = this.connections.filter((item) => item.projectId !== projectId)
     await this.persist()
   }
@@ -260,12 +275,21 @@ export class AppController {
     return this.clientFor(projectId).then((client) => client.resumeFetch(projectId, runId))
   }
 
+  addFeed(request: AddFeedRequest) { return this.feeds.add(request) }
+  searchJournals(request: JournalSearchRequest) { return this.feeds.searchJournals(request) }
+  listFeeds() { return this.feeds.list() }
+  removeFeed(subscriptionId: string) { return this.feeds.remove(subscriptionId) }
+  refreshFeed(subscriptionId: string) { return this.feeds.refresh(subscriptionId) }
+  feedItems(request: FeedItemsRequest) { return this.feeds.items(request) }
+  markFeedRead(request: MarkFeedReadRequest) { return this.feeds.markRead(request) }
+
   asset(projectId: string, paperId: string, source: string): Promise<Response> {
     const connection = this.connection(projectId)
     return this.runtimes.asset(connection.runtime, projectId, paperId, source)
   }
 
   async close(): Promise<void> {
+    await this.feeds.close()
     await this.runtimes.close()
   }
 

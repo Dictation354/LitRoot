@@ -80,7 +80,10 @@ const record = async (query, index, outputDir, completionOrder) => {
   if (query.includes('failed')) return { index, attempt: 1, status: 'error', error: { code: 'network_error', reason: 'Fake network failure' }, acceptance: { overall: 'failed' }, completion_order: completionOrder }
   const kind = query.includes('limited') ? 'abstract_only' : 'fulltext'
   const raw = markdown(query, kind)
-  const output = join(outputDir, \`paper-\${index}.md\`)
+  const filename = query.includes('generated-name')
+    ? \`FetchBot_2025_\${'A'.repeat(165)}.md\`
+    : \`FetchBot_2025_Fetched_paper_\${index}.md\`
+  const output = join(outputDir, filename)
   await writeFile(output, raw)
   const doi = raw.match(/doi: "([^"]+)/)?.[1] || null
   return { index, attempt: 1, status: 'ok', doi, output_path: output, output_sha256: hash(raw), content_kind: kind, acceptance: { overall: kind === 'fulltext' ? 'complete' : 'limited', content: { content_kind: kind } }, completion_order: completionOrder }
@@ -105,7 +108,7 @@ if (value('--query-file')) {
   if (query.includes('slow')) await new Promise((resolve) => setTimeout(resolve, 3000))
   const output = value('--output')
   const result = await record(query, 1, outputDir, 1)
-  if (result.output_path && result.output_path !== output) {
+  if (output && result.output_path && result.output_path !== output) {
     const raw = await readFile(result.output_path)
     await writeFile(output, raw)
     result.output_path = output

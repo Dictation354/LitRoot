@@ -31,6 +31,16 @@ export interface IndexedPaperInput {
   modifiedAt: string
 }
 
+export interface PaperReference {
+  id: string
+  relativePath: string
+  filePath: string
+  title: string
+  doi: string
+  url: string
+  assetPaths: string[]
+}
+
 const SCHEMA = `
   PRAGMA foreign_keys = ON;
   PRAGMA journal_mode = WAL;
@@ -141,6 +151,28 @@ function listItem(row: Row): PaperListItem {
     hasOverrides: Object.keys(json<MetadataOverrides>(row.overrides_json, {})).length > 0
   }
 }
+
+function paperReference(row: Row): PaperReference {
+  return {
+    id: asString(row.id),
+    relativePath: asString(row.relative_path),
+    filePath: asString(row.file_path),
+    title: asString(row.title),
+    doi: asString(row.doi),
+    url: asString(row.url),
+    assetPaths: json<string[]>(row.asset_sources_json, [])
+  }
+}
+
+const PAPER_LIST_COLUMNS = `
+  p.id, p.relative_path, p.title, p.authors_json, p.journal, p.year, p.doi, p.url,
+  p.abstract, p.keywords_json, p.source, p.content_kind, p.has_fulltext, p.added_at,
+  p.last_opened_at, p.modified_at, p.overrides_json
+`
+
+const PAPER_REFERENCE_COLUMNS = `
+  id, relative_path, file_path, title, doi, url, asset_sources_json
+`
 
 const SORT_EXPRESSIONS: Record<PaperSortField, string> = {
   title: 'nullif(p.title, \'\') COLLATE NOCASE',
@@ -301,22 +333,24 @@ export class ProjectDatabase {
     `).run(relativePath, message, now())
   }
 
-  removeMissing(seenPaths: Set<string>, seenCandidatePaths = seenPaths): number {
+  removeMissing(
+    seenPaths: Set<string>,
+    seenCandidatePaths = seenPaths
+  ): { papers: number; issues: number } {
     const existing = this.database.prepare('SELECT id, relative_path FROM papers').all() as Row[]
     const removed = existing.filter((row) => !seenPaths.has(asString(row.relative_path)))
+    const issues = this.database.prepare('SELECT relative_path FROM issues').all() as Row[]
+    const removedIssues = issues.filter((row) => !seenCandidatePaths.has(asString(row.relative_path)))
     this.transaction(() => {
       for (const row of removed) {
         this.database.prepare('DELETE FROM paper_fts WHERE paper_id = ?').run(asString(row.id))
         this.database.prepare('DELETE FROM papers WHERE id = ?').run(asString(row.id))
       }
-      const issues = this.database.prepare('SELECT relative_path FROM issues').all() as Row[]
-      for (const row of issues) {
-        if (!seenCandidatePaths.has(asString(row.relative_path))) {
-          this.database.prepare('DELETE FROM issues WHERE relative_path = ?').run(asString(row.relative_path))
-        }
+      for (const row of removedIssues) {
+        this.database.prepare('DELETE FROM issues WHERE relative_path = ?').run(asString(row.relative_path))
       }
     })
-    return removed.length
+    return { papers: removed.length, issues: removedIssues.length }
   }
 
   search(request: PaperSearchRequest): PaperSearchResult {
@@ -345,7 +379,7 @@ export class ProjectDatabase {
       ? "snippet(paper_fts, 9, '<mark>', '</mark>', '…', 24)"
       : 'NULL'
     const rows = this.database.prepare(`
-      SELECT p.*, ${snippet} AS search_snippet
+      SELECT ${PAPER_LIST_COLUMNS}, ${snippet} AS search_snippet
       ${from} ${where}
       ORDER BY ${orderBy(parsed.sortBy, parsed.sortDirection)}
       LIMIT ? OFFSET ?
@@ -371,6 +405,13 @@ export class ProjectDatabase {
       markdownRevision: sha256(asString(row.raw_markdown)),
       assetPaths: json<string[]>(row.asset_sources_json, [])
     }
+  }
+
+  reference(paperId: string): PaperReference | null {
+    const row = this.database.prepare(`
+      SELECT ${PAPER_REFERENCE_COLUMNS} FROM papers WHERE id = ?
+    `).get(paperId) as Row | undefined
+    return row ? paperReference(row) : null
   }
 
   markOpened(paperId: string, at = now()): string | null {
@@ -399,16 +440,12 @@ export class ProjectDatabase {
     return this.get(paperId)
   }
 
-  findByDoi(doi: string, excludingPaperId?: string): PaperListItem | null {
+  findByDoi(doi: string, excludingPaperId?: string): PaperReference | null {
     const row = this.database.prepare(`
-      SELECT *, NULL AS search_snippet FROM papers WHERE doi = ? AND (? IS NULL OR id <> ?) LIMIT 1
+      SELECT ${PAPER_REFERENCE_COLUMNS}
+      FROM papers WHERE doi = ? AND (? IS NULL OR id <> ?) LIMIT 1
     `).get(doi, excludingPaperId ?? null, excludingPaperId ?? null) as Row | undefined
-    return row ? listItem(row) : null
-  }
-
-  filePath(paperId: string): string | null {
-    const row = this.database.prepare('SELECT file_path FROM papers WHERE id = ?').get(paperId) as Row | undefined
-    return row ? asString(row.file_path) : null
+    return row ? paperReference(row) : null
   }
 
   years(): number[] {

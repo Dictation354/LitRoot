@@ -10,6 +10,7 @@ import type {
   ServiceEvent
 } from '../../src/shared/contracts.js'
 import App from '../../src/renderer/src/App.js'
+import { transportFor } from '../renderer-transport.js'
 
 const PROJECT_ID = 'project_aaaaaaaaaaaaaaaaaaaaaaaa'
 const FIRST_PAPER_ID = 'paper_bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -99,6 +100,7 @@ function bridgeMock(): LitRootBridge {
       reveal: async () => undefined,
       export: async () => null,
       copyImage: async () => undefined,
+      openImage: async () => undefined,
       assetUrl: (_projectId, paperId, source) => `litroot-asset://${paperId}/${source}`
     },
     notes: {
@@ -133,7 +135,7 @@ async function waitForElement<T extends Element>(selector: string): Promise<T> {
 beforeEach(async () => {
   window.localStorage.clear()
   window.localStorage.setItem('litroot.current-project', PROJECT_ID)
-  window.litroot = bridgeMock()
+  window.litroot = transportFor(bridgeMock())
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
