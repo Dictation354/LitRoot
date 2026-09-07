@@ -27,6 +27,7 @@ import {
   MIN_MAIN_WIDTH,
   MIN_SIDEBAR_WIDTH,
   RESIZER_WIDTH,
+  type ReadingPosition,
   type PaperTab
 } from './workspace-hooks'
 
@@ -59,7 +60,7 @@ export function PaperTitleHeader({
 }) {
   return (
     <header className="reader-header">
-      <span className="eyebrow">{paper.source || 'PAPER-FETCH'}</span>
+
       <h1><FormattedTitle>{paper.title}</FormattedTitle></h1>
       <p className="reader-authors">{authorLine(paper.authors)}</p>
       <div className="reader-meta">
@@ -311,6 +312,7 @@ export function ReaderWorkspace({
   paper,
   panelRef,
   inspectorWidth,
+  readingPosition, loading, error, missing, onRetry, onBack,
   inspector,
   onOpenExternal,
   onRefresh,
@@ -321,6 +323,12 @@ export function ReaderWorkspace({
   paper: PaperDetail | null
   panelRef: RefObject<HTMLElement | null>
   inspectorWidth: number
+  readingPosition?: ReadingPosition | undefined
+  loading: boolean
+  error: string
+  missing: boolean
+  onRetry(): void
+  onBack(): void
   inspector: ReactNode
   onOpenExternal(url: string): void
   onRefresh(paper: PaperDetail): void
@@ -341,12 +349,15 @@ export function ReaderWorkspace({
               onOpenExternal={onOpenExternal}
               action={<button type="button" onClick={() => onRefresh(paper)}>安全刷新</button>}
             />
-            <ReaderErrorBoundary key={`${project.id}:${paper.id}:${paper.markdownRevision}`}>
-              <MarkdownReader projectId={project.id} paperId={paper.id} title={paper.title} markdown={paper.markdown} />
+            <ReaderErrorBoundary key={`${project.id}:${paper.id}`}>
+              <MarkdownReader projectId={project.id} paperId={paper.id} title={paper.title} markdown={paper.markdown} readingPosition={readingPosition} />
             </ReaderErrorBoundary>
           </>
         ) : (
-          <div className="empty-state"><h2>正在载入文献…</h2></div>
+          <div className="empty-state"><h2>{loading ? '正在载入文献…' : missing ? '文献不存在' : '载入失败'}</h2>
+            {!loading && <div className="button-row"><button type="button" onClick={onRetry}>重试</button><button type="button" onClick={onBack}>返回文献库</button></div>}
+            {error && <details><summary>错误详情</summary>{error}</details>}
+          </div>
         )}
       </section>
       <div
@@ -428,7 +439,7 @@ export function LibraryWorkspace({
     <section className="library-main">
       <header className="library-toolbar">
         <div className="library-identity">
-          <span className="eyebrow">LIBRARY</span>
+
           <h1>{project.name}</h1>
           <span>{total} 篇文献</span>
         </div>
@@ -463,6 +474,7 @@ export function LibraryWorkspace({
         items={items}
         loading={loading}
         query={query}
+        filtered={Boolean(query || year)}
         selectedPaperId={selectedPaperId}
         selectedPaperIds={selectedPaperIds}
         selectionAnchorId={selectionAnchorId}

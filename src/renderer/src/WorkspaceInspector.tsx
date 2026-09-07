@@ -74,6 +74,7 @@ export function WorkspaceInspector({
             key={`${project.id}:${paper.id}:paper-note`}
             projectId={project.id}
             kind="paper"
+            title={paper.title}
             paperId={paper.id}
             event={event}
           />
@@ -83,6 +84,7 @@ export function WorkspaceInspector({
             key={`${project.id}:project-note`}
             projectId={project.id}
             kind="project"
+            title={project.name}
             event={event}
           />
         )}

@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import {
   app,
   BrowserWindow,
+  dialog,
   nativeImage,
   protocol,
   session
@@ -68,6 +69,15 @@ async function registerAssetProtocol(): Promise<void> {
 
 function secureWindow(window: BrowserWindow): void {
   managedWindows.add(window)
+  window.webContents.on('will-prevent-unload', (event) => {
+    const choice = dialog.showMessageBoxSync(window, {
+      type: 'warning', title: '未保存修改',
+      message: '仍有未保存内容或正在进行的保存。',
+      buttons: ['返回编辑', '放弃未保存内容'], defaultId: 0, cancelId: 0,
+      noLink: true
+    })
+    if (choice === 1) event.preventDefault()
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => {
     const developmentUrl = developmentRendererUrl(app.isPackaged, process.env.ELECTRON_RENDERER_URL)
@@ -192,8 +202,17 @@ if (singleInstance) {
 
 app.on('window-all-closed', () => app.quit())
 
-app.on('before-quit', () => {
+app.on('will-quit', (event) => {
+  if (!controller) return
+  event.preventDefault()
+  const closingController = controller
+  controller = null
   unregisterIpc()
   protocol.unhandle('litroot-asset')
-  void controller?.close()
+  void closingController.close().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+  }).finally(() => {
+    // Let Electron finish cancelling this will-quit event before requesting quit again.
+    setImmediate(() => app.quit())
+  })
 })

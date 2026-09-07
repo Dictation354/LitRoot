@@ -46,3 +46,8 @@ export function transportFor(facade: LitRootBridge): LitRootTransportBridge {
     events: facade.events ?? { subscribe: () => () => undefined }
   } as LitRootTransportBridge
 }
+
+if (typeof HTMLDialogElement !== 'undefined') {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+}

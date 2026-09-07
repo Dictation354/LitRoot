@@ -52,7 +52,6 @@ export function ApplicationErrorBoundary({ children }: BoundaryChildrenProps) {
   return (
     <ErrorBoundary fallback={(error, reset) => (
       <main className="render-error application-render-error" role="alert">
-        <span className="eyebrow">RENDER ERROR</span>
         <h1>界面渲染失败</h1>
         <p>项目文件没有被修改。可以先重试渲染；如果问题仍在，请重新载入应用。</p>
         <details><summary>错误详情</summary><code>{error.message}</code></details>
@@ -71,7 +70,6 @@ export function ReaderErrorBoundary({ children }: BoundaryChildrenProps) {
   return (
     <ErrorBoundary fallback={(error, reset) => (
       <div className="render-error reader-render-error" role="alert">
-        <span className="eyebrow">READER ERROR</span>
         <h2>正文渲染失败</h2>
         <p>文献列表、元数据和笔记仍可使用。切换文献会自动恢复正文区域。</p>
         <details><summary>错误详情</summary><code>{error.message}</code></details>

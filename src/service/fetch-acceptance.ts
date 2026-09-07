@@ -212,7 +212,6 @@ export class FetchAcceptance {
     try {
       const missingAssetSet = new Set(missingAssets)
       finalPath = await this.archiveOutput(
-        run,
         item,
         output,
         raw,
@@ -249,7 +248,6 @@ export class FetchAcceptance {
   }
 
   private async archiveOutput(
-    run: FetchRun,
     item: FetchItem,
     output: string,
     raw: string,

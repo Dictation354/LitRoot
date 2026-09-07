@@ -1,6 +1,7 @@
 import type { Dispatch, DragEvent, MouseEvent as ReactMouseEvent, PointerEvent, SetStateAction } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import type { PaperListItem, PaperSortField } from '../../shared/contracts'
+import { useMenuFocus } from './workspace-hooks'
 import { FormattedTitle } from './FormattedTitle'
 import { Icon } from './Icon'
 import type {
@@ -13,6 +14,7 @@ interface LibraryTableProps {
   items: PaperListItem[]
   loading: boolean
   query: string
+  filtered?: boolean
   selectedPaperId: string
   selectedPaperIds: string[]
   selectionAnchorId: string
@@ -81,7 +83,7 @@ function cellValue(paper: PaperListItem, key: LibraryColumnKey): React.ReactNode
         </span>
         {paper.searchSnippet && (
           <small className="table-search-snippet">
-            {paper.searchSnippet.replace(/<\/?mark>/g, '')}
+            {paper.searchSnippet.split(/(<mark>.*?<\/mark>)/gs).map((text, index) => text.startsWith('<mark>') && text.endsWith('</mark>') ? <mark key={index}>{text.slice(6, -7)}</mark> : text)}
           </small>
         )}
       </>
@@ -104,6 +106,7 @@ export function LibraryTable({
   items,
   loading,
   query,
+  filtered = Boolean(query),
   selectedPaperId,
   selectedPaperIds,
   selectionAnchorId,
@@ -126,6 +129,9 @@ export function LibraryTable({
     papers: PaperListItem[]
   } | null>(null)
   const [resizingWidths, setResizingWidths] = useState<Partial<Record<LibraryColumnKey, number>> | null>(null)
+  const menuRef = useMenuFocus(Boolean(contextMenu), () => setContextMenu(null))
+  const dragCleanup = useRef<(() => void) | null>(null)
+  useEffect(() => () => dragCleanup.current?.(), [])
   const visibleColumns = preferences.columns.filter((column) => column.visible)
   const gridTemplateColumns = visibleColumns.map((column) => (
     resizingWidths?.[column.key] === undefined ? `${column.width}fr` : `${resizingWidths[column.key]}px`
@@ -138,6 +144,7 @@ export function LibraryTable({
   const beginColumnResize = (event: PointerEvent<HTMLSpanElement>, leftIndex: number): void => {
     event.preventDefault()
     event.stopPropagation()
+    dragCleanup.current?.()
     const grid = event.currentTarget.closest<HTMLElement>('.table-grid')
     const headers = grid ? Array.from(grid.children) as HTMLElement[] : []
     const rightIndex = leftIndex + 1
@@ -201,6 +208,12 @@ export function LibraryTable({
       window.removeEventListener('pointercancel', finish)
     }
 
+    dragCleanup.current = () => {
+      document.body.classList.remove('resizing-panes')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', finish, { once: true })
     window.addEventListener('pointercancel', finish, { once: true })
@@ -296,8 +309,11 @@ export function LibraryTable({
 
   return (
     <div className="library-table-frame" aria-busy={loading}>
+      {selectedPaperIds.length > 0 && <div className="library-selection">
+        <span>已选 {selectedPaperIds.length} 篇</span>
+      </div>}
       <div className="library-table-scroll">
-        <div className="library-table" role="table" style={{ minWidth }} aria-label="文献列表">
+        <div className="library-table" role="grid" aria-multiselectable="true" style={{ minWidth }} aria-label="文献列表">
           <div className="table-header" role="rowgroup">
             <div className="table-grid" role="row" style={{ gridTemplateColumns }}>
               {visibleColumns.map((column, index) => {
@@ -313,6 +329,15 @@ export function LibraryTable({
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => dropColumn(event, column.key)}
                     role="columnheader"
+                    aria-sort={active ? preferences.sortDirection === 'asc' ? 'ascending' : 'descending' : 'none'}
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+                      const target = visibleColumns[index + (event.key === 'ArrowLeft' ? -1 : 1)]
+                      if (!target) return
+                      event.preventDefault()
+                      setPreferences((current) => ({ ...current, columns: reorderLibraryColumns(current.columns, column.key, target.key) }))
+                    }}
                   >
                     <button
                       type="button"
@@ -329,6 +354,18 @@ export function LibraryTable({
                         className="column-resizer"
                         onPointerDown={(event) => beginColumnResize(event, index)}
                         role="separator"
+                        tabIndex={0}
+                        aria-orientation="vertical"
+                        aria-valuemin={64}
+                        aria-valuemax={640}
+                        aria-valuenow={column.width}
+                        onKeyDown={(event) => {
+                          if (event.altKey || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+                          event.preventDefault(); event.stopPropagation()
+                          const total = column.width + rightColumn.width
+                          const width = Math.max(64, total - 640, Math.min(640, total - 64, column.width + (event.key === 'ArrowRight' ? 10 : -10)))
+                          setPreferences((current) => ({ ...current, columns: current.columns.map((entry) => entry.key === column.key ? { ...entry, width } : entry.key === rightColumn.key ? { ...entry, width: total - width } : entry) }))
+                        }}
                         aria-label={`调整${COLUMN_LABELS[column.key]}与${COLUMN_LABELS[rightColumn.key]}列宽`}
                       />
                     )}
@@ -352,6 +389,7 @@ export function LibraryTable({
                 onDoubleClick={() => onOpen(paper)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') onOpen(paper)
+                  if (event.key === ' ') { event.preventDefault(); selectPaper(paper.id, { shiftKey: event.shiftKey, toggleKey: true }) }
                   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
                     event.preventDefault()
                     onSelectionChange(items.map((item) => item.id), paper.id, items[0]?.id ?? paper.id)
@@ -376,7 +414,7 @@ export function LibraryTable({
                 tabIndex={paper.id === selectedPaperId ? 0 : -1}
               >
                 {visibleColumns.map((column) => (
-                  <div className={`paper-cell ${column.key}`} key={column.key} role="cell">
+                  <div className={`paper-cell ${column.key}`} key={column.key} role="gridcell">
                     {cellValue(paper, column.key)}
                   </div>
                 ))}
@@ -411,6 +449,7 @@ export function LibraryTable({
           }}
         >
           <div
+            ref={menuRef}
             className="paper-context-menu"
             role="menu"
             style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -437,9 +476,9 @@ export function LibraryTable({
       )}
       {!loading && items.length === 0 && (
         <div className="table-empty">
-          <Icon name={query ? 'search' : 'book'} size={30} />
-          <strong>{query ? '没有匹配的文献' : '这个项目还没有文献'}</strong>
-          <span>{query ? '尝试其他关键词或清空筛选条件。' : '使用右上角的“添加文献”开始构建文献库。'}</span>
+          <Icon name={filtered ? 'search' : 'book'} size={30} />
+          <strong>{filtered ? '没有匹配的文献' : '这个项目还没有文献'}</strong>
+          <span>{filtered ? '尝试其他关键词或清空筛选条件。' : '使用右上角的“添加文献”开始构建文献库。'}</span>
         </div>
       )}
       {loading && items.length === 0 && <div className="table-loading">正在载入文献…</div>}

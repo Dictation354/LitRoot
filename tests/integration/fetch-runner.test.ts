@@ -341,9 +341,8 @@ describe('paper-fetch task orchestration', () => {
     expect(scopes).toContain('fragmented')
     expect(project.fetch.get(created.id).items[0]?.stage).toBe('assets')
     await expect(readFile(join(project.layout.runs, `${created.id}.results.jsonl`))).rejects.toMatchObject({ code: 'ENOENT' })
-    const cancelling = await project.fetch.cancelItem(created.id, 1)
-    expect(cancelling.items[0]?.state).toBe('cancelling')
-    expect(cancelling.state).toBe('running')
+    // Cancellation may finish before cancelItem returns its latest run snapshot.
+    await project.fetch.cancelItem(created.id, 1)
     const done = await terminal(project, created.id)
     expect(done.items.map((item) => item.state)).toEqual(['cancelled', 'complete'])
     expect(project.search({ projectId: project.layout.id }).total).toBe(1)

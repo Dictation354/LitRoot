@@ -1,5 +1,5 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown, { type Components, type UrlTransform } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
@@ -8,13 +8,15 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import { isSafeLocalImageSource, safeMarkdownLink } from '../../shared/markdown-security'
-import { bridge } from './bridge'
+import { bridge, errorMessage } from './bridge'
+import { useMenuFocus, type ReadingPosition } from './workspace-hooks'
 
 interface MarkdownReaderProps {
   projectId: string
   paperId: string
   title: string
   markdown: string
+  readingPosition?: ReadingPosition | undefined
 }
 
 interface MarkdownNode {
@@ -174,7 +176,90 @@ const urlTransform: UrlTransform = (url, key) => {
   return safeMarkdownLink(url) ?? '#blocked-link'
 }
 
-export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId, title, markdown }: MarkdownReaderProps) {
+const MarkdownBody = memo(function MarkdownBody({ projectId, paperId, title, markdown, onError }: MarkdownReaderProps & { onError(message: string): void }) {
+  const components = useMemo<Components>(() => ({
+    a: ({ href, children, ...props }) => (
+      <a
+        {...props}
+        href={href}
+        onClick={(event) => {
+          event.preventDefault()
+          if (href?.startsWith('#') && href !== '#blocked-link') {
+            document.getElementById(href.slice(1))?.scrollIntoView({ behavior: 'smooth' })
+          } else if (href && /^https?:/i.test(href)) {
+            void bridge().system.openExternal(href).catch((error) => onError(errorMessage(error)))
+          }
+        }}
+        rel="noreferrer"
+      >
+        {children}
+      </a>
+    ),
+    img: ({ src, alt, className }) => {
+      const source = typeof src === 'string' ? src : ''
+      if (!isSafeLocalImageSource(source)) {
+        return <span className="blocked-image">远程或不安全图片已阻止{alt ? `：${alt}` : ''}</span>
+      }
+      return (
+        <img
+          src={bridge().papers.assetUrl(projectId, paperId, source)}
+          data-image-source={source}
+          alt={alt ?? ''}
+          className={className}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+        />
+      )
+    }
+  }), [paperId, projectId, onError])
+  const displayedMarkdown = useMemo(() => withoutDuplicateTitle(markdown, title), [markdown, title])
+
+  return <ReactMarkdown
+    remarkPlugins={[remarkGfm, remarkMath, remarkStandaloneMath, remarkInlineImages]}
+    rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+    urlTransform={urlTransform} components={components}
+  >{displayedMarkdown}</ReactMarkdown>
+})
+
+// Match original UTF-16 text so Unicode case folding never shifts DOM offsets.
+export function findTextRanges(root: HTMLElement, query: string): Range[] {
+  if (!query) return []
+  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
+  const groups: Text[][] = []
+  let block: Element | null = null
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode() as Text | null
+  while (node) {
+    const parent = node.parentElement
+    if (parent && !parent.closest('.katex-mathml, annotation, [hidden], script, style') &&
+      (!parent.closest('details:not([open])') || Boolean(parent.closest('summary')?.parentElement?.matches('details:not([open])')))) {
+      const nextBlock = parent.closest('p, h1, h2, h3, h4, h5, h6, li, td, th, pre, blockquote, div, figcaption') ?? root
+      if (nextBlock !== block || !groups.length) { groups.push([]); block = nextBlock }
+      groups[groups.length - 1]!.push(node)
+    } else block = null
+    node = walker.nextNode() as Text | null
+  }
+  const ranges: Range[] = []
+  for (const nodes of groups) {
+    const text = nodes.map((node) => node.data).join('')
+    for (const match of text.matchAll(expression)) {
+      const start = match.index
+      const end = start + match[0].length
+      let offset = 0
+      const range = document.createRange()
+      for (const node of nodes) {
+        const next = offset + node.length
+        if (start >= offset && start < next) range.setStart(node, start - offset)
+        if (end > offset && end <= next) { range.setEnd(node, end - offset); break }
+        offset = next
+      }
+      ranges.push(range)
+    }
+  }
+  return ranges
+}
+
+export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId, title, markdown, readingPosition }: MarkdownReaderProps) {
   const articleRef = useRef<HTMLElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchRangesRef = useRef<Range[]>([])
@@ -182,9 +267,20 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
   const [fontSize, setFontSize] = useState(loadReaderFontSize)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [composing, setComposing] = useState(false)
+  const searchButtonRef = useRef<HTMLButtonElement>(null)
+  const searchReturnRef = useRef<HTMLElement | null>(null)
+  const tocButtonRef = useRef<HTMLButtonElement>(null)
+  const tocRef = useRef<HTMLDivElement>(null)
+  const [tocOpen, setTocOpen] = useState(false)
+  const [headings, setHeadings] = useState<Array<{ title: string; level: number; element: HTMLElement }>>([])
+  const localPosition = useRef<ReadingPosition>({ top: 0 })
   const [matchCount, setMatchCount] = useState(0)
   const [activeMatch, setActiveMatch] = useState(0)
   const [status, setStatus] = useState('')
+  const [statusError, setStatusError] = useState('')
+  const reportLinkError = useCallback((message: string) => { setStatus('打开链接失败，请重试。'); setStatusError(message) }, [])
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
@@ -192,6 +288,82 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     text?: string
     range?: Range
   } | null>(null)
+
+  const menuRef = useMenuFocus(Boolean(contextMenu), () => setContextMenu(null))
+  useEffect(() => {
+    if (composing) return
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 150)
+    return () => clearTimeout(timer)
+  }, [searchQuery, composing])
+  useEffect(() => {
+    if (!status || !status.startsWith('已')) return
+    const timer = setTimeout(() => setStatus(''), 3000)
+    return () => clearTimeout(timer)
+  }, [status])
+  useLayoutEffect(() => {
+    const root = articleRef.current
+    if (!root) return
+    setHeadings(Array.from(root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')).map((element) => ({
+      title: element.textContent ?? '', level: Number(element.tagName.slice(1)), element
+    })))
+    const panel = root.closest<HTMLElement>('.reader-panel, .reader-window')
+    if (!panel) return
+    const position = readingPosition ?? localPosition.current
+    const blocks = Array.from(root.querySelectorAll<HTMLElement>('p,h1,h2,h3,h4,h5,h6,pre,li,figure'))
+    let adjusting = true
+    const restore = (): void => {
+      if (!adjusting) return
+      const anchor = position.anchorIndex === undefined ? null : blocks[position.anchorIndex]
+      if (anchor) panel.scrollTop += anchor.getBoundingClientRect().top - panel.getBoundingClientRect().top - (position.anchorOffset ?? 0)
+      else panel.scrollTop = position.top
+    }
+    const remember = (): void => {
+      position.top = panel.scrollTop
+      const panelTop = panel.getBoundingClientRect().top
+      const index = blocks.findIndex((block) => block.getBoundingClientRect().bottom > panelTop)
+      if (index >= 0) {
+        position.anchorIndex = index
+        position.anchorOffset = blocks[index]!.getBoundingClientRect().top - panelTop
+      }
+    }
+    const userScroll = (): void => { adjusting = false }
+    const keyScroll = (event: KeyboardEvent): void => {
+      if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) userScroll()
+    }
+    const scroll = (): void => { remember() }
+    restore()
+    panel.addEventListener('scroll', scroll)
+    panel.addEventListener('wheel', userScroll, { passive: true })
+    panel.addEventListener('touchstart', userScroll, { passive: true })
+    panel.addEventListener('pointerdown', userScroll)
+    panel.addEventListener('keydown', keyScroll)
+    root.addEventListener('load', restore, true)
+    return () => {
+      if (panel.isConnected && root.isConnected) remember()
+      panel.removeEventListener('scroll', scroll)
+      panel.removeEventListener('wheel', userScroll)
+      panel.removeEventListener('touchstart', userScroll)
+      panel.removeEventListener('pointerdown', userScroll)
+      panel.removeEventListener('keydown', keyScroll)
+      root.removeEventListener('load', restore, true)
+    }
+  }, [projectId, paperId, markdown, readingPosition])
+  useLayoutEffect(() => {
+    const toc = tocRef.current
+    if (!tocOpen || !toc) return
+    const below = window.innerHeight - toc.getBoundingClientRect().top - 8
+    if (below < 120) {
+      toc.style.top = 'auto'
+      toc.style.bottom = '100%'
+      toc.style.maxHeight = `${Math.max(60, (tocButtonRef.current?.getBoundingClientRect().top ?? 0) - 8)}px`
+    } else toc.style.maxHeight = `${Math.min(500, below)}px`
+    toc.querySelector('button')?.focus({ preventScroll: true })
+  }, [tocOpen])
+  const openSearch = useCallback(() => {
+    searchReturnRef.current = document.activeElement as HTMLElement | null
+    setSearchOpen(true)
+    window.requestAnimationFrame(() => searchInputRef.current?.focus())
+  }, [])
 
   useEffect(() => {
     try {
@@ -202,14 +374,14 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
   }, [fontSize])
 
   useEffect(() => {
-    const openSearch = (event: KeyboardEvent): void => {
+    const handleSearch = (event: KeyboardEvent): void => {
+      if (document.querySelector('dialog[open]') || (event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable="true"]'))) return
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f') return
       event.preventDefault()
-      setSearchOpen(true)
-      window.requestAnimationFrame(() => searchInputRef.current?.focus())
+      openSearch()
     }
-    window.addEventListener('keydown', openSearch)
-    return () => window.removeEventListener('keydown', openSearch)
+    window.addEventListener('keydown', handleSearch)
+    return () => window.removeEventListener('keydown', handleSearch)
   }, [])
 
   useEffect(() => {
@@ -220,37 +392,24 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     setMatchCount(0)
     setActiveMatch(0)
     const root = articleRef.current
-    const normalizedQuery = searchQuery.trim().toLocaleLowerCase()
-    if (!searchOpen || !root || !normalizedQuery || !registry) return
-
-    const ranges: Range[] = []
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let node = walker.nextNode()
-    while (node) {
-      const value = node.textContent ?? ''
-      const normalizedValue = value.toLocaleLowerCase()
-      let offset = normalizedValue.indexOf(normalizedQuery)
-      while (offset >= 0) {
-        const range = document.createRange()
-        range.setStart(node, offset)
-        range.setEnd(node, offset + normalizedQuery.length)
-        ranges.push(range)
-        offset = normalizedValue.indexOf(normalizedQuery, offset + normalizedQuery.length)
-      }
-      node = walker.nextNode()
-    }
+    const query = debouncedQuery.trim()
+    if (!searchOpen || !root || !query || composing) return
+    const ranges = findTextRanges(root, query)
     searchRangesRef.current = ranges
     setMatchCount(ranges.length)
-    registry.set(SEARCH_HIGHLIGHT, new Highlight(...ranges))
-    if (ranges[0]) registry.set(ACTIVE_SEARCH_HIGHLIGHT, new Highlight(ranges[0]))
-  }, [markdown, searchOpen, searchQuery])
+    if (registry) {
+      registry.set(SEARCH_HIGHLIGHT, new Highlight(...ranges))
+      if (ranges[0]) registry.set(ACTIVE_SEARCH_HIGHLIGHT, new Highlight(ranges[0]))
+    }
+    ranges[0]?.startContainer.parentElement?.scrollIntoView?.({ block: 'center' })
+  }, [markdown, searchOpen, debouncedQuery, composing])
 
   useEffect(() => {
     const registry = highlightRegistry()
     const range = searchRangesRef.current[activeMatch]
     registry?.delete(ACTIVE_SEARCH_HIGHLIGHT)
-    if (!registry || !range) return
-    registry.set(ACTIVE_SEARCH_HIGHLIGHT, new Highlight(range))
+    if (!range) return
+    if (registry) registry.set(ACTIVE_SEARCH_HIGHLIGHT, new Highlight(range))
     const target = range.startContainer.parentElement
     target?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
   }, [activeMatch])
@@ -287,10 +446,13 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
   const closeSearch = (): void => {
     setSearchOpen(false)
     setSearchQuery('')
+    setDebouncedQuery('')
+    ;(searchReturnRef.current ?? searchButtonRef.current)?.focus()
   }
 
   const moveSearch = (direction: 1 | -1): void => {
     if (matchCount === 0) return
+    if (matchCount === 1) searchRangesRef.current[0]?.startContainer.parentElement?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
     setActiveMatch((current) => (current + direction + matchCount) % matchCount)
   }
 
@@ -326,8 +488,10 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     if (!text) return
     try {
       await bridge().system.copyText(text)
+      setStatusError('')
       setStatus('已复制文字')
-    } catch {
+    } catch (error) {
+      setStatusError(errorMessage(error))
       setStatus('复制文字失败')
     }
   }
@@ -343,7 +507,8 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     userRangesRef.current = [...userRangesRef.current, range]
     registry.set(USER_HIGHLIGHT, new Highlight(...userRangesRef.current))
     window.getSelection()?.removeAllRanges()
-    setStatus('已高亮文字')
+    setStatusError('')
+      setStatus('已高亮文字')
   }
 
   const copySelectedImage = async (): Promise<void> => {
@@ -352,8 +517,10 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     if (!source) return
     try {
       await bridge().papers.copyImage(projectId, paperId, source)
+      setStatusError('')
       setStatus('已复制图片')
-    } catch {
+    } catch (error) {
+      setStatusError(errorMessage(error))
       setStatus('复制图片失败')
     }
   }
@@ -364,48 +531,14 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
     if (!source) return
     try {
       await bridge().papers.openImage(projectId, paperId, source)
+      setStatusError('')
       setStatus('已请求系统打开图片')
-    } catch {
+    } catch (error) {
+      setStatusError(errorMessage(error))
       setStatus('打开图片失败')
     }
   }
 
-  const components = useMemo<Components>(() => ({
-    a: ({ href, children, ...props }) => (
-      <a
-        {...props}
-        href={href}
-        onClick={(event) => {
-          event.preventDefault()
-          if (href?.startsWith('#') && href !== '#blocked-link') {
-            document.getElementById(href.slice(1))?.scrollIntoView({ behavior: 'smooth' })
-          } else if (href && /^https?:/i.test(href)) {
-            void bridge().system.openExternal(href)
-          }
-        }}
-        rel="noreferrer"
-      >
-        {children}
-      </a>
-    ),
-    img: ({ src, alt, className }) => {
-      const source = typeof src === 'string' ? src : ''
-      if (!isSafeLocalImageSource(source)) {
-        return <span className="blocked-image">远程或不安全图片已阻止{alt ? `：${alt}` : ''}</span>
-      }
-      return (
-        <img
-          src={bridge().papers.assetUrl(projectId, paperId, source)}
-          data-image-source={source}
-          alt={alt ?? ''}
-          className={className}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-        />
-      )
-    }
-  }), [paperId, projectId])
-  const displayedMarkdown = useMemo(() => withoutDuplicateTitle(markdown, title), [markdown, title])
 
   return (
     <>
@@ -425,11 +558,19 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
             onClick={() => setFontSize((value) => Math.min(MAX_READER_FONT_SIZE, value + 1))}
           >A+</button>
         </div>
-        <button type="button" className="reader-search-button" onClick={() => {
-          setSearchOpen(true)
-          window.requestAnimationFrame(() => searchInputRef.current?.focus())
-        }}>搜索正文</button>
-        {status && <span className="reader-tool-status" role="status">{status}</span>}
+        <button ref={searchButtonRef} type="button" className="reader-search-button" onClick={openSearch}>搜索正文</button>
+        {headings.length > 0 && <button ref={tocButtonRef} type="button" aria-expanded={tocOpen} onClick={() => setTocOpen((value) => !value)}>目录</button>}
+        {tocOpen && <div ref={tocRef} className="reader-toc" role="navigation" aria-label="章节目录" onKeyDown={(event) => {
+          if (event.key === 'Escape') { setTocOpen(false); tocButtonRef.current?.focus({ preventScroll: true }) }
+        }}>
+          {headings.map((heading, index) => <button type="button" key={index} style={{ paddingLeft: 12 + (heading.level - 1) * 14 }} onClick={() => {
+            heading.element.scrollIntoView?.({ block: 'start' }); setTocOpen(false); tocButtonRef.current?.focus({ preventScroll: true })
+          }}>{heading.title}</button>)}
+        </div>}
+        {status && <div className="reader-tool-status" role="status"><span>{status}</span>
+          {statusError && <details><summary>错误详情</summary>{statusError}</details>}
+          <button type="button" className="text-button" aria-label="关闭阅读消息" onClick={() => { setStatus(''); setStatusError('') }}>×</button>
+        </div>}
       </div>
       {searchOpen && (
         <div className="reader-find" role="search">
@@ -440,7 +581,10 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
             placeholder="在正文中搜索…"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || composing) return
               if (event.key === 'Enter') {
                 event.preventDefault()
                 moveSearch(event.shiftKey ? -1 : 1)
@@ -460,18 +604,12 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
         style={{ fontSize: `${fontSize}px` }}
         onContextMenu={openContextMenu}
       >
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, remarkStandaloneMath, remarkInlineImages]}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
-          urlTransform={urlTransform}
-          components={components}
-        >
-          {displayedMarkdown}
-        </ReactMarkdown>
+        <MarkdownBody projectId={projectId} paperId={paperId} title={title} markdown={markdown} onError={reportLinkError} />
       </article>
       {contextMenu && createPortal(
         <div className="reader-context-layer" onMouseDown={() => setContextMenu(null)}>
           <div
+            ref={menuRef}
             className="reader-context-menu"
             role="menu"
             style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -485,7 +623,7 @@ export const MarkdownReader = memo(function MarkdownReader({ projectId, paperId,
             ) : (
               <>
                 <button type="button" role="menuitem" onClick={() => void copySelectedText()}>复制</button>
-                <button type="button" role="menuitem" onClick={highlightSelectedText}>高亮</button>
+                <button type="button" role="menuitem" onClick={highlightSelectedText} title="仅本次阅读有效，关闭或刷新正文后清除">临时高亮</button>
               </>
             )}
           </div>

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useModalDialog } from './workspace-hooks'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   FeedItem,
   FeedSubscription,
@@ -53,7 +54,11 @@ export function FeedInbox({
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [days, setDays] = useState<FeedDays>(7)
-  const revision = event?.type === 'feeds.changed' ? event.at : ''
+  const [revision, setRevision] = useState('')
+  const [detailOpen, setDetailOpen] = useState(false)
+  const fetchRequest = useRef(0)
+  useEffect(() => { if (event?.type === 'feeds.changed') setRevision(event.at) }, [event])
+  useEffect(() => () => { fetchRequest.current += 1 }, [scope])
   const focused = items.find((item) => item.id === focusedId) ?? null
   const source = scope === 'recent' ? null : feeds.find((feed) => feed.id === scope) ?? null
   const eligibleProjects = useMemo(
@@ -71,7 +76,11 @@ export function FeedInbox({
     }
   }, [pageSize])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    setItems([])
+    setTotal(0)
+    setDetailOpen(false)
+    setSubmitting(false)
     setOffset(0)
     setSelected([])
     setFocusedId('')
@@ -91,6 +100,10 @@ export function FeedInbox({
       offset
     }).then((result) => {
       if (cancelled) return
+      if (offset > 0 && offset >= result.total) {
+        setOffset(Math.max(0, Math.ceil(result.total / pageSize) - 1) * pageSize)
+        return
+      }
       setItems(result.items)
       setTotal(result.total)
       setFocusedId((current) => result.items.some((item) => item.id === current) ? current : result.items[0]?.id ?? '')
@@ -102,6 +115,7 @@ export function FeedInbox({
 
   const focus = (item: FeedItem, toggle = false): void => {
     setFocusedId(item.id)
+    setDetailOpen(true)
     if (toggle) {
       setSelected((current) => current.includes(item.id)
         ? current.filter((id) => id !== item.id)
@@ -110,13 +124,13 @@ export function FeedInbox({
       setSelected([item.id])
     }
     if (!item.readAt) {
-      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, readAt: new Date().toISOString() } : entry))
       void bridge().feeds.markRead({ itemIds: [item.id], read: true }).catch((error) => onMessage(errorMessage(error)))
     }
   }
 
   const createFetch = async (): Promise<void> => {
-    if (!projectId || selected.length === 0) return
+    if (!projectId || selected.length === 0 || submitting) return
+    const request = ++fetchRequest.current
     const chosen = selected.map((id) => items.find((item) => item.id === id)).filter((item): item is FeedItem => Boolean(item))
     setSubmitting(true)
     try {
@@ -125,21 +139,23 @@ export function FeedInbox({
         inputs: chosen.map((item) => item.doi || item.url || item.title),
         concurrency: 4
       })
-      await bridge().feeds.markRead({ itemIds: chosen.map((item) => item.id), read: true })
+      if (request !== fetchRequest.current) return
       onFetchCreated(projectId, run.id)
+      void bridge().feeds.markRead({ itemIds: chosen.map((item) => item.id), read: true })
+        .catch(() => onMessage('任务已创建，但标记已读失败；请在雷达中重试标记。'))
     } catch (error) {
-      onMessage(errorMessage(error))
+      if (request === fetchRequest.current) onMessage(errorMessage(error))
     } finally {
-      setSubmitting(false)
+      if (request === fetchRequest.current) setSubmitting(false)
     }
   }
 
   return (
-    <div className="feed-workspace">
+    <div className={`feed-workspace ${detailOpen ? 'detail-open' : ''}`}>
       <section className="feed-main">
         <header className="library-toolbar">
           <div className="library-identity">
-            <span className="eyebrow">JOURNAL RADAR</span>
+
             <h1>{source?.title ?? '最近文献'}</h1>
             <span>{total} 条</span>
           </div>
@@ -151,7 +167,7 @@ export function FeedInbox({
             >
               {[1, 3, 7, 14, 30].map((value) => <option value={value} key={value}>近 {value} 天</option>)}
             </select>
-            <span>已选 {selected.length}/50</span>
+            {selected.length > 0 && <span>已选 {selected.length}/50</span>}
             <select aria-label="目标项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
               {eligibleProjects.length === 0 && <option value="">无可用项目</option>}
               {eligibleProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
@@ -161,30 +177,42 @@ export function FeedInbox({
             </button>
           </div>
         </header>
-        <div className="feed-list" aria-busy={loading}>
+        <div className="feed-list" role="grid" aria-label="雷达文献" aria-multiselectable="true" aria-busy={loading}>
           {items.map((item) => (
             <div
               className={`feed-row ${focusedId === item.id ? 'focused' : ''} ${item.readAt ? '' : 'unread'}`}
               key={item.id}
               onClick={(event) => focus(item, event.ctrlKey || event.metaKey)}
-              onDoubleClick={() => { if (item.url) void bridge().system.openExternal(item.url) }}
-              role="button"
-              tabIndex={0}
+              onDoubleClick={() => { if (item.url) void bridge().system.openExternal(item.url).catch((error) => onMessage(errorMessage(error))) }}
+              role="row"
+              aria-selected={selected.includes(item.id)}
+              tabIndex={focusedId === item.id ? 0 : -1}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focus(item, event.key === ' ') }
+                if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+                event.preventDefault()
+                const rows = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('.feed-row') ?? [])
+                const index = rows.indexOf(event.currentTarget)
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+                rows[next]?.focus()
+                if (items[next]) setFocusedId(items[next].id)
+              }}
             >
-              <input
+              <span role="gridcell"><input
                 aria-label={`选择 ${item.title}`}
                 checked={selected.includes(item.id)}
                 onChange={() => focus(item, true)}
                 onClick={(event) => event.stopPropagation()}
                 type="checkbox"
-              />
-              <span className="feed-unread-dot" />
-              <div>
+              /></span>
+              <span className="feed-unread-dot" aria-hidden="true" />
+              <div role="gridcell">
                 <strong><FormattedTitle>{item.title}</FormattedTitle></strong>
                 <small>{authors(item.authors)}</small>
               </div>
-              <span>{item.sourceTitle}</span>
-              <time>{date(item.publishedAt ?? item.discoveredAt)}</time>
+              <span role="gridcell">{item.sourceTitle}</span>
+              <time role="gridcell">{date(item.publishedAt ?? item.discoveredAt)}</time>
             </div>
           ))}
           {!loading && items.length === 0 && <div className="empty-state"><h2>这段时间没有文献</h2><p>Crossref 登记的新文献会在刷新期刊后出现。</p></div>}
@@ -205,6 +233,7 @@ export function FeedInbox({
         </footer>
       </section>
       <aside className="feed-detail">
+        <button type="button" className="feed-back" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => document.querySelector<HTMLElement>('.feed-row[tabindex="0"]')?.focus()) }}>返回列表</button>
         {focused ? (
           <>
             <span className="eyebrow">{focused.sourceTitle}</span>
@@ -212,9 +241,9 @@ export function FeedInbox({
             <p className="reader-authors">{authors(focused.authors)}</p>
             <div className="feed-detail-meta">
               <span>{date(focused.publishedAt)}</span>
-              {focused.doi && <button className="text-button" type="button" onClick={() => void bridge().system.openExternal(`https://doi.org/${focused.doi}`)}>DOI {focused.doi}</button>}
-              {focused.url && <button className="text-button" type="button" onClick={() => void bridge().system.openExternal(focused.url)}>打开原文</button>}
-              <button className="text-button" type="button" onClick={() => void bridge().feeds.markRead({ itemIds: [focused.id], read: Boolean(focused.readAt) ? false : true })}>
+              {focused.doi && <button className="text-button" type="button" onClick={() => void bridge().system.openExternal(`https://doi.org/${focused.doi}`).catch((error) => onMessage(errorMessage(error)))}>DOI {focused.doi}</button>}
+              {focused.url && <button className="text-button" type="button" onClick={() => void bridge().system.openExternal(focused.url).catch((error) => onMessage(errorMessage(error)))}>打开原文</button>}
+              <button className="text-button" type="button" onClick={() => void bridge().feeds.markRead({ itemIds: [focused.id], read: !focused.readAt }).catch((error) => onMessage(errorMessage(error)))}>
                 {focused.readAt ? '恢复未读' : '标为已读'}
               </button>
             </div>
@@ -231,6 +260,7 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
   onClose(): void
   onAdded(feed: FeedSubscription): void
 }) {
+  const dialogRef = useModalDialog(open, onClose)
   const [input, setInput] = useState('')
   const [message, setMessage] = useState('')
   const [candidates, setCandidates] = useState<JournalCandidate[]>([])
@@ -293,12 +323,11 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
   }
   const working = searching || Boolean(addingIssn)
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="modal feed-add-modal" role="dialog" aria-modal="true" aria-labelledby="feed-add-title">
-        <header className="modal-header"><div><span className="eyebrow">JOURNAL RADAR</span><h2 id="feed-add-title">添加期刊</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></header>
+    <dialog ref={dialogRef} className="modal feed-add-modal" aria-labelledby="feed-add-title">
+        <header className="modal-header"><div><h2 id="feed-add-title">添加期刊</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></header>
         <div className="modal-body">
           <label className="field"><span className="field-label">期刊名称或 ISSN</span><input value={input} onChange={(event) => changeInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !working) void search() }} placeholder="例如 Remote Sensing of Environment 或 0034-4257" /></label>
-          <p className="muted">搜索和近期文献均由 Crossref 提供。选择搜索结果后会验证期刊，并回填最近 30 天登记的文献。</p>
+
           {candidates.length > 0 && (
             <div className="journal-results" aria-label="期刊搜索结果">
               {candidates.map((candidate) => (
@@ -311,10 +340,9 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
               ))}
             </div>
           )}
-          {message && <p className="form-message status-error">{message}</p>}
+          {message && <div className="form-message status-error" role="alert"><p>操作未完成，请检查后重试。</p><details><summary>错误详情</summary>{message}</details></div>}
         </div>
         <footer className="modal-footer"><button type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" disabled={working || !trimmed} onClick={() => void search()}>{searching ? '正在搜索…' : '搜索期刊'}</button></footer>
-      </section>
-    </div>
+    </dialog>
   )
 }

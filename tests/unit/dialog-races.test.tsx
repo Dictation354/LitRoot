@@ -146,7 +146,7 @@ describe('dialog request races', () => {
     await settle()
 
     const select = container.querySelector<HTMLSelectElement>('.run-select select')
-    expect(select?.textContent).toContain('completed')
+    expect(select?.textContent).toContain('已结束')
     expect(select?.querySelector('option')?.value).toBe('run_cccccccccccccccccccccccc')
   })
 
@@ -251,9 +251,9 @@ describe('dialog request races', () => {
     })
     const report = (version: string): DependencyReport => ({
       runtimeLabel: version,
-      ready: true,
+      ready: false,
       checks: [{
-        name: 'node', ok: true, version, required: '24.15+', repairCommand: '', reason: null
+        name: 'node', ok: false, version, required: '24.15+', repairCommand: '', reason: null
       }]
     })
     wsl.resolve(report('v24.17.0'))
@@ -323,7 +323,75 @@ it.each(['single', 'batch', 'refresh', 'batch-refresh'])('shows real stages and 
   expect(buttons[0]!.disabled).toBe(true)
   expect(container.textContent).toContain('取消中')
   await act(async () => response.resolve(cancelled))
-  expect(container.textContent).toContain('成功 0')
+  expect(container.textContent).not.toContain('成功 0')
   expect(container.textContent).toContain('已取消 1')
   expect([...container.querySelectorAll('button')].some((button) => button.textContent === '取消此篇')).toBe(false)
+})
+
+it('uses a modal dialog with initial input focus, Escape and trigger focus restoration', async () => {
+  window.litroot = transportFor({ feeds: { searchJournals: vi.fn() } } as unknown as LitRootBridge)
+  const close = vi.fn()
+  const trigger = document.createElement('button')
+  document.body.append(trigger)
+  trigger.focus()
+  await act(async () => root.render(<AddFeedDialog open onClose={close} onAdded={vi.fn()} />))
+  const dialog = container.querySelector('dialog')!
+  expect(dialog.open).toBe(true)
+  expect(document.activeElement).toBe(dialog.querySelector('input'))
+  await act(async () => dialog.dispatchEvent(new Event('cancel', { cancelable: true })))
+  expect(close).toHaveBeenCalledTimes(1)
+  await act(async () => root.render(<AddFeedDialog open={false} onClose={close} onAdded={vi.fn()} />))
+  expect(document.activeElement).toBe(trigger)
+  trigger.remove()
+})
+
+it('renders only 50 items from a 1000-item run and updates elapsed time only in running leaves', async () => {
+  vi.useFakeTimers()
+  const projectOne = project('project_a', 'Large run')
+  const large = run('run_large', projectOne.id, new Date().toISOString())
+  large.state = 'running'
+  large.items = Array.from({ length: 1000 }, (_, index) => ({ ...itemFor(index + 1, `Paper ${index + 1}`),
+    title: `Title **${index + 1}**`, state: index === 0 ? 'running' as const : 'complete' as const,
+    stage: index === 0 ? 'fetching' as const : 'terminal' as const, stageStartedAt: new Date().toISOString() }))
+  window.litroot = transportFor({ fetch: { list: async () => [large] } } as unknown as LitRootBridge)
+  const start = performance.now()
+  try {
+    await act(async () => root.render(<AddPapersDialog open project={projectOne} event={null} onClose={vi.fn()} onOpenPaper={vi.fn()} />))
+    expect(container.querySelectorAll('.fetch-item')).toHaveLength(50)
+    expect(container.querySelector('.fetch-summary')?.textContent).toContain('999/1000')
+    expect(container.querySelector('.fetch-item details')?.hasAttribute('open')).toBe(false)
+    const records: MutationRecord[] = []
+    const observer = new MutationObserver((mutations) => records.push(...mutations))
+    observer.observe(container, { characterData: true, subtree: true, childList: true })
+    await act(async () => vi.advanceTimersByTimeAsync(1000))
+    observer.disconnect()
+    expect(records.length).toBeGreaterThan(0)
+    expect(records.every((record) => record.target.parentElement?.closest('.fetch-item.running details'))).toBe(true)
+    await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '下一页')!.click())
+    expect(container.querySelectorAll('.fetch-item')).toHaveLength(50)
+    expect(container.querySelector('.fetch-item-title .index')?.textContent).toBe('51')
+    console.log(`1000 tasks: mount and page navigation ${(performance.now() - start).toFixed(1)} ms; 50 rendered; timer mutations ${records.length}`)
+  } finally { vi.useRealTimers() }
+})
+
+it('reports resume failure and ignores an action response after changing projects', async () => {
+  const firstProject = project('project_first', 'First')
+  const secondProject = project('project_second', 'Second')
+  const firstRun = run('run_first', firstProject.id, '2026-09-07T00:00:00Z')
+  firstRun.items = [{ ...itemFor(1, 'Failed paper'), state: 'failed', stage: 'terminal' }]
+  const secondRun = run('run_second', secondProject.id, '2026-09-07T00:00:00Z')
+  const response = deferred<FetchRun>()
+  const resume = vi.fn().mockRejectedValueOnce(new Error('resume failed')).mockReturnValueOnce(response.promise)
+  window.litroot = transportFor({ fetch: { list: async (id: string) => id === firstProject.id ? [firstRun] : [secondRun], resume } } as unknown as LitRootBridge)
+  const render = (project: ProjectSummary) => <AddPapersDialog open project={project} event={null} onClose={vi.fn()} onOpenPaper={vi.fn()} />
+  await act(async () => root.render(render(firstProject)))
+  const resumeButton = () => [...container.querySelectorAll('button')].find((button) => button.textContent === '继续未完成项')!
+  await act(async () => resumeButton().click())
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('resume failed')
+  await act(async () => resumeButton().click())
+  expect(resumeButton().disabled).toBe(true)
+  await act(async () => root.render(render(secondProject)))
+  await act(async () => response.resolve(firstRun))
+  expect(container.querySelector<HTMLSelectElement>('.run-select select')?.value).toBe(secondRun.id)
+  expect(container.textContent).not.toContain('Failed paper')
 })

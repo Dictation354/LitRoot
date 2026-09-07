@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
@@ -11,7 +12,7 @@ interface FormattedTitleProps {
   children: string
 }
 
-export function FormattedTitle({ children }: FormattedTitleProps) {
+export const FormattedTitle = memo(function FormattedTitle({ children }: FormattedTitleProps) {
   return (
     <span className="formatted-title">
       <ReactMarkdown
@@ -22,4 +23,4 @@ export function FormattedTitle({ children }: FormattedTitleProps) {
       </ReactMarkdown>
     </span>
   )
-}
+})

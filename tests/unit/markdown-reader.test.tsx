@@ -1,13 +1,22 @@
 // @vitest-environment jsdom
 
-import { act } from 'react'
+import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { LitRootBridge } from '../../src/shared/contracts.js'
 import { FormattedTitle } from '../../src/renderer/src/FormattedTitle.js'
-import { MarkdownReader } from '../../src/renderer/src/MarkdownReader.js'
+import { MarkdownReader, findTextRanges } from '../../src/renderer/src/MarkdownReader.js'
 import { transportFor } from '../renderer-transport.js'
+
+const markdownRenders = vi.hoisted(() => ({ count: 0 }))
+vi.mock('react-markdown', async (original) => {
+  const module = await original<typeof import('react-markdown')>()
+  return { ...module, default: (props: React.ComponentProps<typeof module.default>) => {
+    markdownRenders.count += 1
+    return createElement(module.default, props)
+  } }
+})
 
 describe('safe Markdown reader', () => {
   it('adjusts and remembers font size, searches text, highlights selections and copies images', async () => {
@@ -81,6 +90,7 @@ describe('safe Markdown reader', () => {
         search.dispatchEvent(new Event('input', { bubbles: true }))
         await Promise.resolve()
       })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 170)) })
       expect(container.querySelector('.reader-find span')?.textContent).toBe('1 / 2')
 
       const paragraph = article.querySelector('p')!
@@ -104,7 +114,7 @@ describe('safe Markdown reader', () => {
         paragraph.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 12 }))
       })
       const highlightButton = [...document.body.querySelectorAll<HTMLButtonElement>('.reader-context-menu button')]
-        .find((button) => button.textContent === '高亮')
+        .find((button) => button.textContent === '临时高亮')
       await act(async () => { highlightButton?.click() })
       expect(highlights.has('litroot-user-highlight')).toBe(true)
 
@@ -131,7 +141,7 @@ describe('safe Markdown reader', () => {
         'project_aaaaaaaaaaaaaaaaaaaaaaaa', 'paper_bbbbbbbbbbbbbbbbbbbbbbbb', 'assets/figure.png'
       )
       expect(document.body.querySelector('.reader-context-menu')).toBeNull()
-      expect(container.querySelector('[role="status"]')?.textContent).toBe('已请求系统打开图片')
+      expect(container.querySelector('[role="status"] > span')?.textContent).toBe('已请求系统打开图片')
 
       openImage.mockRejectedValueOnce(new Error('No default viewer'))
       await act(async () => {
@@ -143,7 +153,7 @@ describe('safe Markdown reader', () => {
         button.click()
       })
       expect(document.body.querySelector('.reader-context-menu')).toBeNull()
-      expect(container.querySelector('[role="status"]')?.textContent).toBe('打开图片失败')
+      expect(container.querySelector('[role="status"] > span')?.textContent).toBe('打开图片失败')
     } finally {
       await act(async () => { root.unmount() })
       container.remove()
@@ -259,4 +269,93 @@ describe('safe Markdown reader', () => {
     const distinct = render('# Introduction\n\nBody')
     expect(distinct).toContain('<h1>Introduction</h1>')
   })
+})
+
+it('matches visible inline phrases and literal special characters without Unicode offset corruption', () => {
+  const article = document.createElement('article')
+  article.innerHTML = '<p>Alpha <strong>bold</strong> <em>and</em> <a>linked</a> phrase. İX [a+b].</p><p>Next paragraph</p><span class="katex-mathml">duplicate</span><span class="katex-html">duplicate</span>'
+  expect(findTextRanges(article, 'bold and linked').map((range) => range.toString())).toEqual(['bold and linked'])
+  expect(findTextRanges(article, 'x').map((range) => range.toString())).toEqual(['X', 'x'])
+  expect(findTextRanges(article, 'İx').map((range) => range.toString())).toEqual(['İX'])
+  expect(findTextRanges(article, '[a+b]').map((range) => range.toString())).toEqual(['[a+b]'])
+  expect(findTextRanges(article, 'phrase. İX [a+b].Next')).toHaveLength(0)
+  expect(findTextRanges(article, 'duplicate')).toHaveLength(1)
+})
+
+it('debounces replacement queries, locates each first result, supports IME and restores search and TOC focus', async () => {
+  vi.useFakeTimers()
+  const scroll = vi.fn()
+  HTMLElement.prototype.scrollIntoView = scroll
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => root.render(<MarkdownReader projectId="p" paperId="one" title="Title" markdown={'## First\n\nAlpha **beta**\n\n### Second\n\nBeta 中文'} />))
+    const tocButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '目录')!
+    tocButton.focus()
+    await act(async () => tocButton.click())
+    const toc = container.querySelector('.reader-toc')!
+    expect(toc.querySelectorAll('button')).toHaveLength(2)
+    expect(document.activeElement).toBe(toc.querySelector('button'))
+    await act(async () => toc.querySelectorAll('button')[1]!.click())
+    expect(scroll).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('.reader-toc')).toBeNull()
+    expect(document.activeElement).toBe(tocButton)
+    await act(async () => tocButton.click())
+    await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(container.querySelector('.reader-toc')).toBeNull()
+    const searchButton = container.querySelector<HTMLButtonElement>('.reader-search-button')!
+    searchButton.focus()
+    await act(async () => searchButton.click())
+    await act(async () => vi.advanceTimersByTimeAsync(20))
+    const input = container.querySelector<HTMLInputElement>('.reader-find input')!
+    const enter = async (text: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await enter('alpha')
+    await enter('beta')
+    await act(async () => vi.advanceTimersByTimeAsync(150))
+    expect(container.querySelector('.reader-find span')?.textContent).toBe('1 / 2')
+    expect(scroll).toHaveBeenCalledTimes(2)
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    expect(container.querySelector('.reader-find span')?.textContent).toBe('2 / 2')
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })))
+    expect(container.querySelector('.reader-find span')?.textContent).toBe('1 / 2')
+    await enter('alpha')
+    await act(async () => vi.advanceTimersByTimeAsync(150))
+    expect(scroll).toHaveBeenCalledTimes(5)
+    await act(async () => input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })))
+    await enter('中文')
+    await act(async () => vi.advanceTimersByTimeAsync(200))
+    expect(container.querySelector('.reader-find span')?.textContent).toBe('0 / 0')
+    await act(async () => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
+    await act(async () => vi.advanceTimersByTimeAsync(150))
+    expect(container.querySelector('.reader-find span')?.textContent).toBe('1 / 1')
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(document.activeElement).toBe(searchButton)
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+    vi.useRealTimers()
+    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView
+  }
+})
+
+it('parses a long body only once while adjusting tools and font size', async () => {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const markdown = Array.from({ length: 1000 }, (_, index) => `## Section ${index}\n\nLong paragraph **bold ${index}** with a [link](https://example.org).`).join('\n\n')
+  const before = markdownRenders.count
+  const start = performance.now()
+  try {
+    await act(async () => root.render(<MarkdownReader projectId="p" paperId="one" title="Title" markdown={markdown} />))
+    const parsedAt = performance.now()
+    expect(markdownRenders.count - before).toBe(1)
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="增大正文字号"]')?.click())
+    await act(async () => container.querySelector<HTMLButtonElement>('.reader-search-button')?.click())
+    expect(markdownRenders.count - before).toBe(1)
+    console.log(`Long Markdown ${markdown.length} characters: mount ${(parsedAt - start).toFixed(1)} ms, tools ${(performance.now() - parsedAt).toFixed(1)} ms, body parses 1`)
+  } finally { await act(async () => root.unmount()); container.remove() }
 })

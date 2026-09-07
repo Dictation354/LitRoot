@@ -111,7 +111,7 @@ describe('Feed inbox', () => {
     })
     expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: null, days: 14, limit: pageSize, offset: 0 })
     expect(container.querySelectorAll('.feed-row')).toHaveLength(pageSize)
-    expect(container.textContent).toContain('已选 0/50')
+    expect(container.textContent).not.toContain('已选 0/50')
     expect(previous!.disabled).toBe(true)
     expect(container.querySelector('.library-footer > span')?.textContent).toBe(`1–${pageSize} / ${allItems.length}`)
     for (let offset = pageSize; offset < allItems.length; offset += pageSize) {
@@ -351,4 +351,28 @@ describe('Add journal dialog', () => {
     expect(container.querySelector('.journal-result')).not.toBeNull()
     expect(container.textContent).toContain('Crossref 暂时不可用')
   })
+})
+
+it('opens a created fetch even when marking read fails, and does not refetch on unrelated events', async () => {
+  const list = vi.fn(async () => ({ items, total: items.length }))
+  const create = vi.fn(async () => ({ id: 'created-run' }))
+  const markRead = vi.fn(async () => { throw new Error('mark read failed') })
+  const onFetchCreated = vi.fn()
+  const onMessage = vi.fn()
+  window.litroot = transportFor({ feeds: { items: list, markRead }, fetch: { create } } as unknown as LitRootBridge)
+  const render = (event: React.ComponentProps<typeof FeedInbox>['event']) => <FeedInbox scope="recent" feeds={[subscription]} projects={projects} event={event} onFetchCreated={onFetchCreated} onMessage={onMessage} />
+  await act(async () => root.render(render({ type: 'feeds.changed', at: '2026-09-07T00:00:00Z' })))
+  const calls = list.mock.calls.length
+  await act(async () => root.render(render({ type: 'papers.changed', projectId: projects[0]!.id, at: '2026-09-07T00:00:01Z' })))
+  expect(list).toHaveBeenCalledTimes(calls)
+  const row = container.querySelector<HTMLElement>('.feed-row')!
+  row.focus()
+  await act(async () => row.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })))
+  expect(container.querySelector<HTMLInputElement>('.feed-row input')?.checked).toBe(true)
+  await act(async () => row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+  expect(document.activeElement).toBe(container.querySelectorAll('.feed-row')[1])
+  await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '添加到项目')!.click())
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(onFetchCreated).toHaveBeenCalledWith(projects[0]!.id, 'created-run')
+  expect(onMessage).toHaveBeenCalledWith('任务已创建，但标记已读失败；请在雷达中重试标记。')
 })

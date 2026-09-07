@@ -1,9 +1,7 @@
 import { z } from 'zod'
 
-export const API_VERSION = 1 as const
 export const PROJECT_SCHEMA_VERSION = 1 as const
 export const NOTE_SCHEMA_VERSION = 1 as const
-export const ACCEPTANCE_SCHEMA_VERSION = 2 as const
 
 export const contentKindSchema = z.enum(['fulltext', 'abstract_only', 'metadata_only'])
 export type ContentKind = z.infer<typeof contentKindSchema>
@@ -474,7 +472,6 @@ export const apiErrorSchema = z.object({
     details: z.unknown().optional()
   })
 })
-export type ApiErrorBody = z.infer<typeof apiErrorSchema>
 
 export interface BridgeErrorPayload {
   code: string

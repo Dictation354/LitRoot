@@ -2,14 +2,15 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent
 } from 'react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type {
+  NoteDocument, NoteKind, MetadataField, ServiceEvent,
   PaperDetail,
   PaperListItem,
   PaperSortField,
   ProjectSummary
 } from '../../shared/contracts'
-import { bridge, errorMessage } from './bridge'
+import { bridge, BridgeError, errorMessage } from './bridge'
 import {
   loadLibraryPreferences,
   saveLibraryPreferences
@@ -73,11 +74,17 @@ export function useLibraryWorkspace({
   const [preferences, setPreferences] = useState(
     () => loadLibraryPreferences(window.localStorage)
   )
-  const debouncedQuery = useDebounced(query, 250)
+  const queryState = useMemo(() => ({ projectId, query }), [projectId, query])
+  const debounced = useDebounced(queryState, 250)
+  const debouncedQuery = debounced.projectId === projectId ? debounced.query : ''
 
   useEffect(() => saveLibraryPreferences(window.localStorage, preferences), [preferences])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    setPapers([])
+    setTotal(0)
+    setYears([])
+    setLoadingPapers(false)
     if (projectId) window.localStorage.setItem(PROJECT_STORAGE_KEY, projectId)
     else window.localStorage.removeItem(PROJECT_STORAGE_KEY)
     setQuery('')
@@ -107,6 +114,10 @@ export function useLibraryWorkspace({
       offset
     }).then((result) => {
       if (cancelled) return
+      if (offset > 0 && offset >= result.total) {
+        setOffset(Math.max(0, Math.ceil(result.total / preferences.pageSize) - 1) * preferences.pageSize)
+        return
+      }
       setPapers(result.items)
       setTotal(result.total)
       setYears(result.years)
@@ -117,7 +128,7 @@ export function useLibraryWorkspace({
       ))
       setSelectedPaperIds((current) => {
         const retained = current.filter((id) => result.items.some((item) => item.id === id))
-        return retained.length > 0 ? retained : (result.items[0] ? [result.items[0].id] : [])
+        return retained
       })
       setSelectionAnchorId((current) => (
         result.items.some((item) => item.id === current) ? current : (result.items[0]?.id ?? '')
@@ -229,6 +240,10 @@ export function useWorkspaceTabs({
   const [activeTabKey, setActiveTabKey] = useState(LIBRARY_TAB_KEY)
   const [readerState, setReaderState] = useState<{ key: string; paper: PaperDetail } | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const [detailMissing, setDetailMissing] = useState(false)
+  const [retry, setRetry] = useState(0)
+  const positions = useRef(new Map<string, ReadingPosition>())
   const readerPanelRef = useRef<HTMLElement>(null)
   const activePaperTab = useMemo(
     () => openTabs.find((tab) => tab.key === activeTabKey) ?? null,
@@ -238,27 +253,31 @@ export function useWorkspaceTabs({
     ? readerState.paper
     : null
 
-  useLayoutEffect(() => {
-    if (readerPanelRef.current) readerPanelRef.current.scrollTop = 0
-  }, [activeTabKey])
+  if (activePaperTab && !positions.current.has(activePaperTab.key)) {
+    positions.current.set(activePaperTab.key, { top: 0 })
+  }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!activePaperTab) {
       setReaderState(null)
+      setLoadingDetail(false)
       return
     }
     let cancelled = false
     setLoadingDetail(true)
+    setDetailError('')
+    setDetailMissing(false)
     void bridge().papers.get(activePaperTab.projectId, activePaperTab.paperId).then((detail) => {
       if (cancelled) return
-      if (detail) setReaderState({ key: activePaperTab.key, paper: detail })
+      setReaderState(detail ? { key: activePaperTab.key, paper: detail } : null)
+      setDetailMissing(!detail)
       if (detail) {
         setOpenTabs((current) => current.map((tab) => (
           tab.key === activePaperTab.key ? { ...tab, title: detail.title } : tab
         )))
       }
     }).catch((error) => {
-      if (!cancelled) onMessage(errorMessage(error))
+      if (!cancelled) { setReaderState(null); setDetailError(errorMessage(error)) }
     }).finally(() => {
       if (!cancelled) setLoadingDetail(false)
     })
@@ -268,6 +287,7 @@ export function useWorkspaceTabs({
     activePaperTab?.projectId,
     activePaperTab?.paperId,
     revision,
+    retry,
     onMessage
   ])
 
@@ -301,6 +321,7 @@ export function useWorkspaceTabs({
   }
 
   const closeTab = (key: string): void => {
+    positions.current.delete(key)
     const index = openTabs.findIndex((tab) => tab.key === key)
     if (index < 0) return
     const wasActive = activeTabKey === key
@@ -331,6 +352,7 @@ export function useWorkspaceTabs({
     const removedKeys = new Set(
       openTabs.filter((tab) => tab.projectId === removedProjectId).map((tab) => tab.key)
     )
+    removedKeys.forEach((key) => positions.current.delete(key))
     setOpenTabs((current) => current.filter((tab) => tab.projectId !== removedProjectId))
     if (removedKeys.has(activeTabKey)) setActiveTabKey(LIBRARY_TAB_KEY)
   }
@@ -341,6 +363,8 @@ export function useWorkspaceTabs({
     activePaperTab,
     activePaper,
     loadingDetail,
+    detailError, detailMissing, retryDetail: () => setRetry((value) => value + 1),
+    readingPosition: activePaperTab ? positions.current.get(activePaperTab.key) : undefined,
     readerPanelRef,
     activateTab,
     activateLibrary: () => setActiveTabKey(LIBRARY_TAB_KEY),
@@ -385,33 +409,32 @@ export function usePaneLayout(inspectorKey: string | null) {
     MAX_INSPECTOR_WIDTH
   ))
   const appShellRef = useRef<HTMLDivElement>(null)
+  const dragCleanup = useRef<(() => void) | null>(null)
+  useEffect(() => () => dragCleanup.current?.(), [])
 
   useEffect(() => saveStoredWidth(SIDEBAR_WIDTH_KEY, sidebarWidth), [sidebarWidth])
   useEffect(() => saveStoredWidth(INSPECTOR_WIDTH_KEY, inspectorWidth), [inspectorWidth])
 
+  const [availableWidth, setAvailableWidth] = useState(window.innerWidth)
   useLayoutEffect(() => {
-    const fitLayout = (): void => {
-      const total = appShellRef.current?.clientWidth || window.innerWidth
-      let nextSidebar = sidebarWidth
-      let nextInspector = inspectorWidth
-      let overflow = nextSidebar + MIN_MAIN_WIDTH + RESIZER_WIDTH
-        + (hasInspector ? nextInspector + RESIZER_WIDTH : 0) - total
-      if (hasInspector && overflow > 0) {
-        const inspectorReduction = Math.min(overflow, nextInspector - MIN_INSPECTOR_WIDTH)
-        nextInspector -= inspectorReduction
-        overflow -= inspectorReduction
-      }
-      if (overflow > 0) nextSidebar = Math.max(MIN_SIDEBAR_WIDTH, nextSidebar - overflow)
-      if (nextSidebar !== sidebarWidth) setSidebarWidth(Math.round(nextSidebar))
-      if (nextInspector !== inspectorWidth) setInspectorWidth(Math.round(nextInspector))
-    }
-    fitLayout()
-    window.addEventListener('resize', fitLayout)
-    return () => window.removeEventListener('resize', fitLayout)
-  }, [inspectorKey, inspectorWidth, sidebarWidth])
+    const measure = (): void => setAvailableWidth(appShellRef.current?.clientWidth || window.innerWidth)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+  let fittedSidebar = sidebarWidth
+  let fittedInspector = inspectorWidth
+  let overflow = fittedSidebar + MIN_MAIN_WIDTH + RESIZER_WIDTH
+    + (hasInspector ? fittedInspector + RESIZER_WIDTH : 0) - availableWidth
+  if (hasInspector && overflow > 0) {
+    const reduction = Math.min(overflow, fittedInspector - MIN_INSPECTOR_WIDTH)
+    fittedInspector -= reduction
+    overflow -= reduction
+  }
+  if (overflow > 0) fittedSidebar = Math.max(MIN_SIDEBAR_WIDTH, fittedSidebar - overflow)
 
   const appWidth = (): number => appShellRef.current?.clientWidth || window.innerWidth
-  const clampSidebar = (value: number, currentInspector = inspectorWidth): number => {
+  const clampSidebar = (value: number, currentInspector = fittedInspector): number => {
     const dynamicMaximum = appWidth() - MIN_MAIN_WIDTH - RESIZER_WIDTH
       - (hasInspector ? currentInspector + RESIZER_WIDTH : 0)
     return Math.round(Math.min(
@@ -420,7 +443,7 @@ export function usePaneLayout(inspectorKey: string | null) {
       Math.max(MIN_SIDEBAR_WIDTH, value)
     ))
   }
-  const clampInspector = (value: number, currentSidebar = sidebarWidth): number => {
+  const clampInspector = (value: number, currentSidebar = fittedSidebar): number => {
     const dynamicMaximum = appWidth() - currentSidebar - MIN_MAIN_WIDTH - RESIZER_WIDTH * 2
     return Math.round(Math.min(
       MAX_INSPECTOR_WIDTH,
@@ -434,9 +457,10 @@ export function usePaneLayout(inspectorKey: string | null) {
     target: 'sidebar' | 'inspector'
   ): void => {
     event.preventDefault()
+    dragCleanup.current?.()
     const startX = event.clientX
-    const startSidebar = sidebarWidth
-    const startInspector = inspectorWidth
+    const startSidebar = fittedSidebar
+    const startInspector = fittedInspector
     document.body.classList.add('resizing-panes')
     const move = (nextEvent: globalThis.PointerEvent): void => {
       const delta = nextEvent.clientX - startX
@@ -449,6 +473,7 @@ export function usePaneLayout(inspectorKey: string | null) {
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
     }
+    dragCleanup.current = finish
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', finish, { once: true })
     window.addEventListener('pointercancel', finish, { once: true })
@@ -461,15 +486,228 @@ export function usePaneLayout(inspectorKey: string | null) {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
     event.preventDefault()
     const direction = event.key === 'ArrowRight' ? 10 : -10
-    if (target === 'sidebar') setSidebarWidth((value) => clampSidebar(value + direction))
-    else setInspectorWidth((value) => clampInspector(value - direction))
+    if (target === 'sidebar') setSidebarWidth(clampSidebar(fittedSidebar + direction))
+    else setInspectorWidth(clampInspector(fittedInspector - direction))
   }
 
   return {
     appShellRef,
-    sidebarWidth,
-    inspectorWidth,
+    sidebarWidth: fittedSidebar,
+    inspectorWidth: fittedInspector,
     beginResize,
     resizeWithKeyboard
   }
+}
+
+// Editor state belongs to the workspace: component unmount must not cancel a write.
+export interface NoteDraft {
+  key: string
+  title: string
+  projectId: string
+  paperId?: string | undefined
+  kind: NoteKind
+  document: NoteDocument | null
+  content: string
+  dirty: boolean
+  saving: boolean
+  loading: boolean
+  conflict: boolean
+  error: string
+  readRequest: number
+  timer?: ReturnType<typeof setTimeout>
+  attached: number
+}
+
+export type MetadataForm = Record<MetadataField, string>
+export interface MetadataDraft {
+  key: string
+  projectId: string
+  paperId: string
+  title: string
+  form: MetadataForm
+  base: MetadataForm
+  modified: Set<MetadataField>
+  saving: boolean
+  message: string
+  error: string
+  existingPaperId: string
+  attached: number
+}
+
+export function metadataForm(paper: PaperDetail): MetadataForm {
+  return {
+    title: paper.title, authors: paper.authors.join('\n'), journal: paper.journal,
+    year: paper.year?.toString() ?? '', doi: paper.doi, url: paper.url,
+    abstract: paper.abstract, keywords: paper.keywords.join('\n')
+  }
+}
+
+function createEditorSession() {
+  const notes = new Map<string, NoteDraft>()
+  const metadata = new Map<string, MetadataDraft>()
+  const listeners = new Set<() => void>()
+  let revision = 0
+  const notify = (): void => { revision += 1; listeners.forEach((listener) => listener()) }
+  const releaseNote = (draft: NoteDraft): void => {
+    if (!draft.attached && !draft.dirty && !draft.saving && !draft.loading) notes.delete(draft.key)
+  }
+  const saveNote = async (draft: NoteDraft): Promise<void> => {
+    clearTimeout(draft.timer)
+    if (!draft.document || !draft.dirty || draft.saving || draft.conflict || draft.error) return
+    draft.saving = true
+    const content = draft.content
+    notify()
+    try {
+      const next = await bridge().notes.write({
+        projectId: draft.projectId, kind: draft.kind,
+        ...(draft.paperId ? { paperId: draft.paperId } : {}),
+        content, expectedRevision: draft.document.revision
+      })
+      draft.document = next
+      draft.dirty = draft.content !== content
+    } catch (error) {
+      draft.error = errorMessage(error)
+      draft.conflict = error instanceof BridgeError && error.code === 'note_conflict'
+    } finally {
+      draft.saving = false
+      releaseNote(draft)
+      notify()
+    }
+    if (draft.dirty && !draft.error && !draft.conflict) void saveNote(draft)
+  }
+  const loadNote = async (draft: NoteDraft, discard = false): Promise<void> => {
+    if (draft.saving || (!discard && draft.dirty)) return
+    const request = ++draft.readRequest
+    draft.loading = true
+    draft.error = ''
+    notify()
+    try {
+      const next = await bridge().notes.read({
+        projectId: draft.projectId, kind: draft.kind,
+        ...(draft.paperId ? { paperId: draft.paperId } : {})
+      })
+      if (request !== draft.readRequest || (!discard && draft.dirty)) return
+      draft.document = next
+      draft.content = next.content
+      draft.dirty = false
+      draft.conflict = false
+    } catch (error) {
+      if (request === draft.readRequest) draft.error = errorMessage(error)
+    } finally {
+      if (request === draft.readRequest) draft.loading = false
+      releaseNote(draft)
+      notify()
+    }
+  }
+  return {
+    notes, metadata, notify, saveNote, loadNote,
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
+    snapshot: () => revision,
+    releaseNote,
+    releaseMetadata(draft: MetadataDraft) {
+      if (!draft.attached && !draft.modified.size && !draft.saving) metadata.delete(draft.key)
+    },
+    changeNote(draft: NoteDraft, content: string) {
+      draft.content = content
+      draft.dirty = draft.conflict || content !== draft.document?.content
+      clearTimeout(draft.timer)
+      if (!draft.error && !draft.conflict) draft.timer = setTimeout(() => { void saveNote(draft) }, 800)
+      notify()
+    },
+    noteEvent(event: ServiceEvent) {
+      if (event.type !== 'note.changed') return
+      for (const draft of notes.values()) {
+        if (draft.projectId !== event.projectId || draft.kind !== event.kind ||
+          (draft.paperId ?? null) !== event.paperId || draft.document?.revision === event.revision || draft.saving) continue
+        if (draft.dirty) {
+          draft.conflict = true
+          draft.error = '磁盘文件已被外部修改，自动保存已暂停。'
+          clearTimeout(draft.timer)
+          notify()
+        } else void loadNote(draft)
+      }
+    },
+    pending() {
+      return [
+        ...[...notes.values()].filter((draft) => draft.dirty || draft.saving),
+        ...[...metadata.values()].filter((draft) => draft.modified.size || draft.saving)
+      ]
+    },
+    discardProject(projectId: string) {
+      for (const draft of notes.values()) {
+        if (draft.projectId !== projectId) continue
+        clearTimeout(draft.timer)
+        draft.dirty = false
+        draft.readRequest += 1
+        notes.delete(draft.key)
+      }
+      for (const draft of metadata.values()) if (draft.projectId === projectId) {
+        draft.modified.clear()
+        metadata.delete(draft.key)
+      }
+      notify()
+    }
+  }
+}
+
+export const EditorSessionContext = createContext<ReturnType<typeof createEditorSession> | null>(null)
+
+export function useEditorSession() {
+  const context = useContext(EditorSessionContext)
+  const [local] = useState(createEditorSession)
+  const session = context ?? local
+  useSyncExternalStore(session.subscribe, session.snapshot)
+  return session
+}
+
+export interface ReadingPosition { top: number; anchorIndex?: number; anchorOffset?: number }
+
+export function useModalDialog(open: boolean, onClose: () => void) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useLayoutEffect(() => {
+    const dialog = ref.current
+    if (!open || !dialog) return
+    const previous = document.activeElement as HTMLElement | null
+    dialog.showModal()
+    ;(dialog.querySelector('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)') as HTMLElement | null ?? dialog.querySelector('button'))?.focus()
+    const cancel = (event: Event): void => { event.preventDefault(); close.current() }
+    dialog.addEventListener('cancel', cancel)
+    return () => {
+      dialog.removeEventListener('cancel', cancel)
+      dialog.close()
+      previous?.focus()
+    }
+  }, [open])
+  return ref
+}
+
+export function useMenuFocus(open: boolean, onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useLayoutEffect(() => {
+    const menu = ref.current
+    if (!open || !menu) return
+    const previous = document.activeElement as HTMLElement | null
+    const bounds = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - bounds.width - 8))}px`
+    menu.style.top = `${Math.max(8, Math.min(bounds.top, window.innerHeight - bounds.height - 8))}px`
+    const items = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'))
+    items[0]?.focus()
+    const keydown = (event: KeyboardEvent): void => {
+      const index = items.indexOf(document.activeElement as HTMLElement)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+        : event.key === 'ArrowDown' ? (index + 1) % items.length
+          : event.key === 'ArrowUp' ? (index - 1 + items.length) % items.length : -1
+      if (next >= 0) { event.preventDefault(); items[next]?.focus() }
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        event.preventDefault(); event.stopPropagation(); close.current()
+      }
+    }
+    menu.addEventListener('keydown', keydown)
+    return () => { menu.removeEventListener('keydown', keydown); previous?.focus() }
+  }, [open])
+  return ref
 }

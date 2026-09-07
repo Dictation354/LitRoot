@@ -2,13 +2,14 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   LitRootBridge,
   PaperDetail,
   ProjectSummary,
   ServiceEvent
 } from '../../src/shared/contracts.js'
+import { MarkdownReader } from '../../src/renderer/src/MarkdownReader.js'
 import App from '../../src/renderer/src/App.js'
 import { transportFor } from '../renderer-transport.js'
 
@@ -159,6 +160,7 @@ describe('reader scroll behavior', () => {
     const firstImage = await waitForElement<HTMLImageElement>('.markdown-reader img')
 
     reader.scrollTop = 640
+    reader.dispatchEvent(new Event('scroll'))
     await act(async () => {
       eventListener?.({
         type: 'scan.started',
@@ -183,6 +185,7 @@ describe('reader scroll behavior', () => {
 
     const secondImage = container.querySelector('.markdown-reader img')
     secondReader.scrollTop = 520
+    secondReader.dispatchEvent(new Event('scroll'))
     await act(async () => {
       eventListener?.({
         type: 'papers.changed',
@@ -194,4 +197,45 @@ describe('reader scroll behavior', () => {
     expect(secondReader.scrollTop).toBe(520)
     expect(container.querySelector('.markdown-reader img')).toBe(secondImage)
   })
+})
+
+it('restores each open tab through library navigation and releases position when the tab is closed', async () => {
+  await act(async () => container.querySelector('.paper-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  const reader = await waitForElement<HTMLElement>('.reader-panel')
+  reader.scrollTop = 640
+    reader.dispatchEvent(new Event('scroll'))
+  await act(async () => container.querySelector<HTMLButtonElement>('.home-tab')!.click())
+  await act(async () => container.querySelector('.paper-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  await waitForElement('.markdown-reader')
+  expect(container.querySelector('.reader-panel')?.scrollTop).toBe(640)
+  await act(async () => container.querySelector<HTMLButtonElement>('.tab-close')!.click())
+  await act(async () => container.querySelector('.paper-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  await waitForElement('.markdown-reader')
+  expect(container.querySelector('.reader-panel')?.scrollTop).toBe(0)
+})
+
+it('keeps a reading anchor through delayed image layout and stops adjusting after user scrolling', async () => {
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  let anchorTop = 1000
+  const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const scroll = this.closest('.reader-panel')?.scrollTop ?? 0
+    const top = this.tagName === 'P' && this.textContent === 'Anchor' ? anchorTop - scroll : 0
+    return { top, bottom: top + (this.textContent === 'Anchor' ? 50 : 0), left: 0, right: 500, width: 500, height: 50, x: 0, y: top, toJSON() {} }
+  })
+  const position = { top: 980, anchorIndex: 1, anchorOffset: 20 }
+  try {
+    await act(async () => root.render(<section className="reader-panel"><MarkdownReader projectId={PROJECT_ID} paperId={FIRST_PAPER_ID} title="Title" markdown={'First\n\nAnchor'} readingPosition={position} /></section>))
+    const panel = container.querySelector<HTMLElement>('.reader-panel')!
+    expect(panel.scrollTop).toBe(980)
+    anchorTop += 200
+    await act(async () => container.querySelector('article')!.dispatchEvent(new Event('load')))
+    expect(panel.scrollTop).toBe(1180)
+    panel.dispatchEvent(new Event('wheel'))
+    panel.scrollTop = 600
+    panel.dispatchEvent(new Event('scroll'))
+    anchorTop += 200
+    await act(async () => container.querySelector('article')!.dispatchEvent(new Event('load')))
+    expect(panel.scrollTop).toBe(600)
+  } finally { bounds.mockRestore() }
 })

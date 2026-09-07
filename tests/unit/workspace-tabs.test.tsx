@@ -223,6 +223,7 @@ describe('workspace tabs', () => {
     await act(async () => next!.click())
     expect(requests.at(-1)).toMatchObject({ limit: 50, offset: 50 })
     const rows = container.querySelectorAll<HTMLElement>('.paper-row')
+    await act(async () => rows[0]!.click())
     await act(async () => rows[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })))
     expect(container.querySelectorAll('.paper-row[aria-selected="true"]')).toHaveLength(2)
     await act(async () => {
@@ -233,7 +234,7 @@ describe('workspace tabs', () => {
     expect(search.value).toBe('Paper')
     expect(year.value).toBe('2024')
     expect(container.querySelectorAll('.paper-row')).toHaveLength(pageSize)
-    expect(container.querySelectorAll('.paper-row[aria-selected="true"]')).toHaveLength(1)
+    expect(container.querySelectorAll('.paper-row[aria-selected="true"]')).toHaveLength(0)
     expect(previous!.disabled).toBe(true)
     expect(container.querySelector('.library-footer > span')?.textContent).toBe(`1–${pageSize} / ${allItems.length}`)
     for (let offset = pageSize; offset < allItems.length; offset += pageSize) {
@@ -310,7 +311,7 @@ describe('workspace tabs', () => {
     const thirdRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_THREE}"]`))
 
     expect(container.querySelector('.library-main')).not.toBeNull()
-    expect(firstRow.getAttribute('aria-selected')).toBe('true')
+    expect(firstRow.getAttribute('aria-selected')).toBe('false')
     expect(container.querySelector('.inspector-panel')).toBeNull()
     expect(container.querySelector('.inspector-resizer')).toBeNull()
     expect(getPaper).not.toHaveBeenCalled()
@@ -525,4 +526,98 @@ describe('workspace tabs', () => {
     await act(async () => { exportButton?.click() })
     expect(exports).toEqual([[PAPER_ONE, PAPER_THREE]])
   })
+})
+
+it('clears old project data immediately and ignores late failure and unrelated project events', async () => {
+  await act(async () => root.unmount())
+  let rejectOld!: (error: Error) => void
+  let resolveNew!: (result: PaperSearchResult) => void
+  const old = new Promise<PaperSearchResult>((_resolve, reject) => { rejectOld = reject })
+  const next = new Promise<PaperSearchResult>((resolve) => { resolveNew = resolve })
+  const mock = bridgeMock()
+  const search = vi.fn(({ projectId }: PaperSearchRequest) => projectId === PROJECT_ONE ? old : next)
+  mock.papers.search = search
+  window.litroot = transportFor(mock)
+  root = createRoot(container)
+  await act(async () => root.render(<App />))
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.project-main')].find((button) => button.textContent?.includes('Project Two'))!.click())
+  expect(container.querySelectorAll('.paper-row')).toHaveLength(0)
+  expect(container.querySelector('.library-identity')?.textContent).toContain('0 篇文献')
+  expect(container.querySelectorAll('[aria-label="年份筛选"] option')).toHaveLength(1)
+  await act(async () => rejectOld(new Error('stale project failure')))
+  expect(container.textContent).not.toContain('stale project failure')
+  await act(async () => resolveNew({ items: [secondPaper], total: 1, years: [2025] }))
+  const count = search.mock.calls.length
+  await act(async () => eventListener?.({ type: 'papers.changed', projectId: PROJECT_ONE, at: '2026-09-07T00:00:00Z' }))
+  expect(search).toHaveBeenCalledTimes(count)
+  expect(container.querySelector('.paper-row')?.textContent).toContain('Beta paper')
+})
+
+it('returns to a valid page after a background result shrinks and distinguishes missing detail from loading', async () => {
+  await act(async () => root.unmount())
+  let total = 51
+  const mock = bridgeMock()
+  mock.papers.search = async (request) => {
+    requests.push(request)
+    return { items: request.offset < total ? [firstPaper] : [], total, years: [2024] }
+  }
+  mock.papers.get = async () => null
+  window.litroot = transportFor(mock)
+  root = createRoot(container)
+  await act(async () => root.render(<App />))
+  await act(async () => container.querySelectorAll<HTMLButtonElement>('.library-footer button')[1]!.click())
+  total = 1
+  await act(async () => eventListener?.({ type: 'papers.changed', projectId: PROJECT_ONE, at: '2026-09-07T00:00:00Z' }))
+  expect(requests.at(-1)?.offset).toBe(0)
+  await act(async () => container.querySelector('.paper-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  expect(container.querySelector('.reader-panel')?.textContent).toContain('文献不存在')
+  expect(container.querySelector('.reader-panel')?.textContent).not.toContain('正在载入')
+  await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '返回文献库')!.click())
+  expect(container.querySelector('.library-main')).not.toBeNull()
+})
+
+it('retains metadata after closing a tab and protects unload without prompting on navigation', async () => {
+  const confirm = vi.spyOn(window, 'confirm')
+  await act(async () => container.querySelector('.paper-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  const title = container.querySelector<HTMLInputElement>('.metadata-editor input')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(title, 'Unsaved title')
+    title.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const unload = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(unload)
+  expect(unload.defaultPrevented).toBe(true)
+  await act(async () => container.querySelector<HTMLButtonElement>('.tab-close')!.click())
+  expect(confirm).not.toHaveBeenCalled()
+  expect(container.querySelector('.unsaved-entry')).toBeNull()
+  await act(async () => container.querySelector('.paper-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  expect(container.querySelector<HTMLInputElement>('.metadata-editor input')?.value).toBe('Unsaved title')
+  await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '放弃修改')!.click())
+  const clean = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(clean)
+  expect(clean.defaultPrevented).toBe(false)
+  confirm.mockRestore()
+})
+
+it('supports menu navigation, grid sorting semantics and keyboard column resize and reorder', async () => {
+  const trigger = container.querySelector<HTMLButtonElement>('.project-menu-trigger')!
+  trigger.focus()
+  await act(async () => trigger.click())
+  const menu = document.body.querySelector('.project-menu-popup')!
+  expect(document.activeElement).toBe(menu.querySelector('button'))
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+  expect(document.activeElement).toBe(menu.querySelectorAll('button')[1])
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+  expect(document.activeElement).toBe(menu.querySelector('button'))
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  expect(document.activeElement).toBe(trigger)
+  expect(container.querySelector('[role="grid"]')).not.toBeNull()
+  const header = container.querySelector<HTMLElement>('[role="columnheader"]')!
+  expect(header.getAttribute('aria-sort')).toBe('ascending')
+  const separator = header.querySelector<HTMLElement>('[role="separator"]')!
+  const width = Number(separator.getAttribute('aria-valuenow'))
+  await act(async () => separator.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+  expect(Number(separator.getAttribute('aria-valuenow'))).toBe(width + 10)
+  await act(async () => header.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, bubbles: true })))
+  expect(container.querySelector('[role="columnheader"]')?.textContent).toContain('作者')
 })

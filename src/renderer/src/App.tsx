@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type {
   PaperDetail,
@@ -11,10 +11,13 @@ import { bridge, errorMessage } from './bridge'
 import { ReaderErrorBoundary } from './ErrorBoundary'
 import { AddFeedDialog, FeedInbox } from './FeedInbox'
 import { Icon } from './Icon'
+import { NoteEditor } from './NoteEditor'
+import { MetadataEditor } from './MetadataEditor'
 import { MarkdownReader } from './MarkdownReader'
 import { ProjectDialog } from './ProjectDialog'
 import { type InspectorTab, WorkspaceInspector } from './WorkspaceInspector'
 import {
+  EditorSessionContext, useEditorSession, useModalDialog, useMenuFocus,
   LIBRARY_TAB_KEY,
   RESIZER_WIDTH,
   useLibraryWorkspace,
@@ -36,7 +39,9 @@ const TRANSIENT_PROJECT_REFRESH_MS = 1_000
 function ReaderWindow({ projectId, paperId }: { projectId: string; paperId: string }) {
   const [paper, setPaper] = useState<PaperDetail | null>(null)
   const [message, setMessage] = useState('')
+  const [actionError, setActionError] = useState('')
   const [revision, setRevision] = useState(0)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => bridge().events.subscribe((event) => {
     if (event.type === 'papers.changed' && event.projectId === projectId) {
@@ -46,27 +51,30 @@ function ReaderWindow({ projectId, paperId }: { projectId: string; paperId: stri
 
   useEffect(() => {
     let cancelled = false
+    setLoading(true)
+    setMessage('')
     void bridge().papers.get(projectId, paperId).then((detail) => {
       if (cancelled) return
       setPaper(detail)
       document.title = detail ? `${detail.title} — LitRoot` : '文献不存在 — LitRoot'
     }).catch((error) => {
       if (!cancelled) setMessage(errorMessage(error))
-    })
+    }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [projectId, paperId, revision])
 
-  if (message) return <div className="reader-window-state" role="alert">{message}</div>
-  if (!paper) return <div className="reader-window-state">正在载入文献…</div>
+  if (message) return <div className="reader-window-state" role="alert">载入失败<button type="button" onClick={() => setRevision((value) => value + 1)}>重试</button><details><summary>错误详情</summary>{message}</details></div>
+  if (!paper) return <div className="reader-window-state">{loading ? '正在载入文献…' : '文献不存在'}<button type="button" onClick={() => setRevision((value) => value + 1)}>重试</button></div>
   return (
     <main className="reader-window">
+      {actionError && <div role="alert" className="reader-action-error">打开链接失败，请重试。<details><summary>错误详情</summary>{actionError}</details><button type="button" onClick={() => setActionError('')}>关闭</button></div>}
       <PaperTitleHeader
         paper={paper}
         doiPrefix="DOI "
         sourceLabel="在线查看"
-        onOpenExternal={(url) => { void bridge().system.openExternal(url) }}
+        onOpenExternal={(url) => { void bridge().system.openExternal(url).catch((error) => setActionError(errorMessage(error))) }}
       />
-      <ReaderErrorBoundary key={`${projectId}:${paper.id}:${paper.markdownRevision}`}>
+      <ReaderErrorBoundary key={`${projectId}:${paper.id}`}>
         <MarkdownReader projectId={projectId} paperId={paper.id} title={paper.title} markdown={paper.markdown} />
       </ReaderErrorBoundary>
     </main>
@@ -74,6 +82,36 @@ function ReaderWindow({ projectId, paperId }: { projectId: string; paperId: stri
 }
 
 function WorkspaceApp() {
+  const editors = useEditorSession()
+  const [draftsOpen, setDraftsOpen] = useState(false)
+  const [draftKey, setDraftKey] = useState('')
+  const [draftPaper, setDraftPaper] = useState<PaperDetail | null>(null)
+  const [draftError, setDraftError] = useState('')
+  const [draftRetry, setDraftRetry] = useState(0)
+  const draftDialog = useModalDialog(draftsOpen, () => setDraftsOpen(false))
+  const pending = editors.pending()
+  const draft = editors.notes.get(draftKey) ?? editors.metadata.get(draftKey)
+  useEffect(() => {
+    const prevent = (event: BeforeUnloadEvent): void => {
+      if (!editors.pending().length) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', prevent)
+    return () => window.removeEventListener('beforeunload', prevent)
+  }, [editors])
+  useEffect(() => {
+    if (!draftsOpen || !draft || 'kind' in draft) return
+    let cancelled = false
+    setDraftPaper(null)
+    setDraftError('')
+    void bridge().papers.get(draft.projectId, draft.paperId).then((paper) => {
+      if (cancelled) return
+      setDraftPaper(paper)
+      if (!paper) setDraftError('文献不存在，草稿仍保留。')
+    }).catch((error) => { if (!cancelled) setDraftError(errorMessage(error)) })
+    return () => { cancelled = true }
+  }, [draftsOpen, draftKey, draftRetry])
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [feeds, setFeeds] = useState<FeedSubscription[]>([])
   const [feedScope, setFeedScope] = useState<'recent' | string | null>(null)
@@ -83,7 +121,14 @@ function WorkspaceApp() {
   )
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [message, setMessage] = useState('')
+  const [success, setSuccess] = useState('')
+  useEffect(() => {
+    if (!success) return
+    const timer = setTimeout(() => setSuccess(''), 3000)
+    return () => clearTimeout(timer)
+  }, [success])
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('metadata')
+  const [removingProject, setRemovingProject] = useState(false)
   const [projectDialog, setProjectDialog] = useState(false)
   const [fetchDialog, setFetchDialog] = useState(false)
   const [focusFetchRunId, setFocusFetchRunId] = useState<string | null>(null)
@@ -94,6 +139,9 @@ function WorkspaceApp() {
   } | null>(null)
   const [event, setEvent] = useState<ServiceEvent | null>(null)
   const [revision, setRevision] = useState(0)
+  const [feedEvent, setFeedEvent] = useState<ServiceEvent | null>(null)
+  const currentProject = useRef(projectId)
+  currentProject.current = projectId
   const [projectMenu, setProjectMenu] = useState<{
     project: ProjectSummary
     left: number
@@ -101,6 +149,8 @@ function WorkspaceApp() {
   } | null>(null)
   const [feedMenu, setFeedMenu] = useState<{ feed: FeedSubscription; left: number; top: number } | null>(null)
 
+  const projectMenuRef = useMenuFocus(Boolean(projectMenu), () => setProjectMenu(null))
+  const feedMenuRef = useMenuFocus(Boolean(feedMenu), () => setFeedMenu(null))
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projects, projectId]
@@ -184,18 +234,19 @@ function WorkspaceApp() {
 
   useEffect(() => bridge().events.subscribe((next) => {
     setEvent(next)
-    if (next.type === 'feeds.changed') void loadFeeds()
-    if (next.type === 'papers.changed') setRevision((value) => value + 1)
+    editors.noteEvent(next)
+    if (next.type === 'feeds.changed') { setFeedEvent(next); void loadFeeds() }
+    if (next.type === 'papers.changed' && next.projectId === currentProject.current) setRevision((value) => value + 1)
     if (next.type === 'scan.started') {
       setProjects((current) => current.map((project) => (
         project.id === next.projectId ? { ...project, status: 'scanning' } : project
       )))
     }
     if (next.type === 'scan.completed') {
-      setRevision((value) => value + 1)
+      if (next.projectId === currentProject.current) setRevision((value) => value + 1)
       void loadProjects()
     }
-  }), [loadFeeds, loadProjects])
+  }), [loadFeeds, loadProjects, editors])
 
 
   const selectProject = (nextProjectId: string): void => {
@@ -216,13 +267,14 @@ function WorkspaceApp() {
     setRefreshTarget(null)
     try {
       const detail = await bridge().papers.get(projectId, nextPaperId)
-      if (detail) openPaper(detail)
+      if (detail && currentProject.current === projectId) openPaper(detail, projectId)
     } catch (error) {
       setMessage(errorMessage(error))
     }
   }
 
   const updatePaper = (next: PaperDetail): void => {
+    if (currentProject.current !== projectId) return
     tabs.updatePaper(next)
     library.replacePaper(next)
     setRevision((value) => value + 1)
@@ -233,9 +285,11 @@ function WorkspaceApp() {
     try {
       const result = await bridge().papers.export(projectId, paperIds, includeImages)
       if (!result) return
-      setMessage(result.failures.length > 0
+      const report = result.failures.length > 0
         ? `已导出 ${result.papers} 篇文献、${result.images} 张图片；${result.failures.length} 个文件失败。`
-        : `已导出 ${result.papers} 篇文献、${result.images} 张图片。`)
+        : `已导出 ${result.papers} 篇文献、${result.images} 张图片。`
+      if (result.failures.length) setMessage(report)
+      else setSuccess(report)
     } catch (error) {
       setMessage(errorMessage(error))
     }
@@ -244,7 +298,7 @@ function WorkspaceApp() {
   const scanProject = async (targetProjectId: string): Promise<void> => {
     try {
       await bridge().projects.scan(targetProjectId)
-      setRevision((value) => value + 1)
+      if (targetProjectId === currentProject.current) setRevision((value) => value + 1)
       await loadProjects()
     } catch (error) {
       setMessage(errorMessage(error))
@@ -252,13 +306,27 @@ function WorkspaceApp() {
   }
 
   const removeProject = async (project: ProjectSummary): Promise<void> => {
-    if (!window.confirm(`只断开“${project.name}”？项目文件不会被删除。`)) return
+    if (removingProject) return
+    const unsaved = editors.pending().filter((draft) => draft.projectId === project.id)
+    if (unsaved.some((draft) => draft.saving)) {
+      setMessage('保存尚未完成，请等待后再断开项目。')
+      return
+    }
+    if (unsaved.length && !window.confirm('该项目有未保存修改。确定放弃并断开项目？')) {
+      setDraftKey(unsaved[0]!.key); setDraftsOpen(true)
+      return
+    }
+    if (!unsaved.length && !window.confirm(`只断开“${project.name}”？项目文件不会被删除。`)) return
+    setRemovingProject(true)
+    editors.discardProject(project.id)
     try {
       await bridge().projects.remove(project.id)
       tabs.removeProjectTabs(project.id)
       await loadProjects()
     } catch (error) {
       setMessage(errorMessage(error))
+    } finally {
+      setRemovingProject(false)
     }
   }
 
@@ -304,8 +372,11 @@ function WorkspaceApp() {
   }
 
   return (
+    <EditorSessionContext.Provider value={editors}>
     <div
       className="app-shell"
+      inert={removingProject}
+      aria-busy={removingProject}
       ref={appShellRef}
       style={{ gridTemplateColumns: `${sidebarWidth}px ${RESIZER_WIDTH}px minmax(0, 1fr)` }}
     >
@@ -346,7 +417,7 @@ function WorkspaceApp() {
               scope={feedScope}
               feeds={feeds}
               projects={projects}
-              event={event}
+              event={feedEvent}
               onMessage={setMessage}
               onFetchCreated={(targetProjectId, runId) => {
                 selectProject(targetProjectId)
@@ -358,7 +429,7 @@ function WorkspaceApp() {
           ) : !selectedProject ? (
             <section className="welcome">
               <div className="brand-mark hero"><span /></div>
-              <span className="eyebrow">LOCAL · WSL · MARKDOWN</span>
+
               <h1>让项目目录成为<br />文献事实来源。</h1>
               <p>连接项目后，文献会以可搜索、可配置的表格展示，并可在多个阅读标签间切换。</p>
               <button type="button" className="primary-button hero-button" onClick={() => setProjectDialog(true)}>连接第一个项目</button>
@@ -378,9 +449,15 @@ function WorkspaceApp() {
               project={selectedProject}
               paper={activePaper}
               panelRef={readerPanelRef}
+              readingPosition={tabs.readingPosition}
+              loading={loadingDetail}
+              error={tabs.detailError}
+              missing={tabs.detailMissing}
+              onRetry={tabs.retryDetail}
+              onBack={tabs.activateLibrary}
               inspectorWidth={inspectorWidth}
               inspector={renderInspector(selectedProject, activePaper)}
-              onOpenExternal={(url) => { void bridge().system.openExternal(url) }}
+              onOpenExternal={(url) => { void bridge().system.openExternal(url).catch((error) => setMessage(errorMessage(error))) }}
               onRefresh={(paper) => {
                 setRefreshTarget({
                   targets: [{
@@ -457,6 +534,7 @@ function WorkspaceApp() {
       {projectMenu && createPortal(
         <div className="project-menu-layer" onMouseDown={() => setProjectMenu(null)}>
           <div
+            ref={projectMenuRef}
             className="project-menu-popup"
             role="menu"
             style={{ left: projectMenu.left, top: projectMenu.top }}
@@ -482,7 +560,7 @@ function WorkspaceApp() {
 
       {feedMenu && createPortal(
         <div className="project-menu-layer" onMouseDown={() => setFeedMenu(null)}>
-          <div className="project-menu-popup feed-menu-popup" role="menu" style={{ left: feedMenu.left, top: feedMenu.top }} onMouseDown={(event) => event.stopPropagation()}>
+          <div ref={feedMenuRef} className="project-menu-popup feed-menu-popup" role="menu" style={{ left: feedMenu.left, top: feedMenu.top }} onMouseDown={(event) => event.stopPropagation()}>
             <button type="button" role="menuitem" onClick={() => {
               const feed = feedMenu.feed
               setFeedMenu(null)
@@ -506,10 +584,22 @@ function WorkspaceApp() {
         document.body
       )}
 
-      {message && (
-        <div className="toast" role="alert">
-          <span>{message}</span>
-          <button type="button" onClick={() => setMessage('')} aria-label="关闭消息">×</button>
+      {draftsOpen && <dialog ref={draftDialog} className="modal drafts-modal" aria-labelledby="drafts-title">
+        <header className="modal-header"><h2 id="drafts-title">未保存修改</h2><button type="button" onClick={() => setDraftsOpen(false)}>关闭</button></header>
+        <div className="modal-body">
+          <nav className="button-row">{pending.map((entry) => <button type="button" key={entry.key} onClick={() => setDraftKey(entry.key)}>
+            {projects.find((project) => project.id === entry.projectId)?.name} · {entry.title} · {'kind' in entry ? (entry.kind === 'project' ? '项目笔记' : '论文笔记') : '信息'}
+          </button>)}</nav>
+          {draft && ('kind' in draft ? <NoteEditor key={draft.key} projectId={draft.projectId} paperId={draft.paperId} title={draft.title} kind={draft.kind} event={event} />
+            : draftPaper && draftPaper.id === draft.paperId ? <MetadataEditor key={draft.key} projectId={draft.projectId} paper={draftPaper} onChange={setDraftPaper} onLocatePaper={(id) => {
+              setDraftsOpen(false); void bridge().papers.get(draft.projectId, id).then((paper) => { if (paper) openPaper(paper, draft.projectId) }).catch((error) => setMessage(errorMessage(error)))
+            }} /> : <p>{draftError || '正在载入…'}{draftError && <button type="button" onClick={() => setDraftRetry((value) => value + 1)}>重试</button>}</p>)}
+        </div>
+      </dialog>}
+      {(message || success) && (
+        <div className="toast" role={message ? 'alert' : 'status'}>
+          {message ? <div><span>{/^[\u3400-\u9fff]/u.test(message) && message.length < 100 ? message : '操作未完成，请重试。'}</span><details><summary>错误详情</summary>{message}</details></div> : <span>{success}</span>}
+          <button type="button" onClick={() => { setMessage(''); setSuccess('') }} aria-label="关闭消息">×</button>
         </div>
       )}
       <ProjectDialog
@@ -540,6 +630,7 @@ function WorkspaceApp() {
         />
       )}
     </div>
+    </EditorSessionContext.Provider>
   )
 }
 

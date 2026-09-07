@@ -57,7 +57,8 @@ describe('localhost service security', () => {
     await expect(client.cancelFetchItem(project.id, run.id, 52)).rejects.toMatchObject({ status: 404 })
     await waitFor(() => registry.require(project.id).fetch.get(run.id).items[50]?.assetProgress !== null)
     expect((await client.getFetch(project.id, run.id)).items[50]?.stage).toBe('assets')
-    expect((await client.cancelFetchItem(project.id, run.id, 51)).items[50]?.state).toBe('cancelling')
+    // The response can already reflect terminal acceptance; verify the final outcome below.
+    await client.cancelFetchItem(project.id, run.id, 51)
     await waitFor(() => registry.require(project.id).fetch.get(run.id).state === 'completed')
     expect((await client.getFetch(project.id, run.id)).items.map((item) => item.state)).toEqual([...Array(49).fill('failed'), 'complete', 'cancelled'])
     await server.close()

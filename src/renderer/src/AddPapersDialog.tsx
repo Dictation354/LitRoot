@@ -1,3 +1,4 @@
+import { useModalDialog } from './workspace-hooks'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FetchRun, ProjectSummary, ServiceEvent } from '../../shared/contracts'
 import { parseBatchInput } from '../../shared/batch-input'
@@ -34,6 +35,17 @@ const stageLabel: Record<FetchRun['items'][number]['stage'], string> = {
   queued: '排队', identity: '身份解析', fetching: '正文获取', assets: '资产处理',
   validating: '抓取验收', writing: '输出写入', acceptance: '验收归档', terminal: '已结束'
 }
+const runLabel: Record<FetchRun['state'], string> = { queued: '排队中', running: '进行中', cancelling: '取消中', completed: '已结束', cancelled: '已取消', interrupted: '已中断' }
+
+function StageElapsed({ startedAt }: { startedAt: string }) {
+  const [tick, setTick] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setTick(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  return <span>{Math.max(0, Math.floor((tick - Date.parse(startedAt)) / 1000))} 秒</span>
+}
+
 const assetLabel = { figure: '正文图', formula: '公式', table: '表格图', supplementary: '补充材料' }
 
 export function AddPapersDialog({
@@ -45,6 +57,7 @@ export function AddPapersDialog({
   onClose,
   onOpenPaper
 }: AddPapersDialogProps) {
+  const dialogRef = useModalDialog(open, onClose)
   const [input, setInput] = useState('')
   const [concurrency, setConcurrency] = useState(4)
   const [runs, setRuns] = useState<FetchRun[]>([])
@@ -52,7 +65,9 @@ export function AddPapersDialog({
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const createRequest = useRef(0)
-  const [tick, setTick] = useState(Date.now())
+  const [page, setPage] = useState(0)
+  const [pendingAction, setPendingAction] = useState('')
+  const actionBusy = useRef(false)
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
@@ -63,17 +78,21 @@ export function AddPapersDialog({
     if (!open) return
     let cancelled = false
     setMessage('')
+    setRuns([])
+    setSelectedRunId(focusRunId ?? null)
     if (refresh) setInput(refresh.targets.map((target) => target.query).join('\n'))
     void bridge().fetch.list(project.id).then((items) => {
       if (cancelled) return
-      setRuns(items)
+      setRuns((current) => [...current, ...items.filter((item) => !current.some((run) => run.id === item.id))])
       setSelectedRunId((current) => current ?? items[0]?.id ?? null)
     }).catch((error) => { if (!cancelled) setMessage(errorMessage(error)) })
     return () => { cancelled = true }
   }, [open, project.id, refresh])
 
   useEffect(() => {
-    if (!open) setSubmitting(false)
+    setSubmitting(false)
+    setPendingAction('')
+    actionBusy.current = false
     return () => { createRequest.current += 1 }
   }, [open, project.id])
 
@@ -87,15 +106,20 @@ export function AddPapersDialog({
     setSelectedRunId((current) => current ?? event.run.id)
   }, [event, open, project.id])
 
-  useEffect(() => {
-    if (!open || !selectedRun || !['queued', 'running', 'cancelling'].includes(selectedRun.state)) return
-    const timer = setInterval(() => setTick(Date.now()), 1_000)
-    return () => clearInterval(timer)
-  }, [open, selectedRun?.state])
+  useEffect(() => setPage(0), [selectedRun?.id])
+  const counts = useMemo(() => {
+    const result = { ended: 0, complete: 0, degraded: 0, failed: 0, limited: 0, action_required: 0, cancelled: 0 }
+    for (const item of selectedRun?.items ?? []) {
+      if (item.stage === 'terminal') result.ended += 1
+      if (Object.hasOwn(result, item.state)) result[item.state as keyof typeof result] += 1
+    }
+    return result
+  }, [selectedRun])
 
   if (!open) return null
 
   const create = async (overrideInput?: string): Promise<void> => {
+    if (submitting) return
     const request = ++createRequest.current
     setSubmitting(true)
     setMessage('')
@@ -124,22 +148,28 @@ export function AddPapersDialog({
 
   const updateRun = (next: FetchRun): void => {
     setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
-    setSelectedRunId(next.id)
   }
 
-  const cancelItem = async (run: FetchRun, index: number): Promise<void> => {
-    updateRun({ ...run, items: run.items.map((item) => item.index === index ? { ...item, state: 'cancelling' } : item) })
+  const runAction = async (action: 'cancel' | 'resume' | 'item', run: FetchRun, index?: number): Promise<void> => {
+    if (actionBusy.current) return
+    actionBusy.current = true
+    const request = createRequest.current
+    setPendingAction(index === undefined ? action : `item:${index}`)
+    setMessage('')
     try {
-      updateRun(await bridge().fetch.cancelItem(project.id, run.id, index))
+      const next = action === 'item' ? await bridge().fetch.cancelItem(project.id, run.id, index!)
+        : action === 'cancel' ? await bridge().fetch.cancel(project.id, run.id)
+          : await bridge().fetch.resume(project.id, run.id)
+      if (request === createRequest.current) updateRun(next)
     } catch (error) {
-      setMessage(errorMessage(error))
-      void bridge().fetch.get(project.id, run.id).then(updateRun).catch(() => undefined)
+      if (request === createRequest.current) setMessage(errorMessage(error))
+    } finally {
+      if (request === createRequest.current) { actionBusy.current = false; setPendingAction('') }
     }
   }
 
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="modal fetch-modal" role="dialog" aria-modal="true" aria-labelledby="fetch-title">
+    <dialog ref={dialogRef} className="modal fetch-modal" aria-labelledby="fetch-title">
         <header className="modal-header">
           <div>
             <span className="eyebrow">{project.name}</span>
@@ -168,21 +198,19 @@ export function AddPapersDialog({
                 {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value}>{value}</option>)}
               </select>
             </div>
-            <p className="muted">
-              固定归档完整正文、全部参考文献与正文图片。每项独立验收，单项失败不会中止其余任务。
-            </p>
+
             {refresh?.batch && refresh.skippedCount > 0 && (
               <p className="form-message">已跳过 {refresh.skippedCount} 篇缺少 DOI 的文献。</p>
             )}
-            <button type="button" className="primary-button full" disabled={submitting || !input.trim()} onClick={() => void create()}>
+            <button type="button" className="primary-button full" disabled={submitting || Boolean(pendingAction) || !input.trim()} onClick={() => void create()}>
               {submitting ? '正在创建…' : refresh?.batch ? '开始批量刷新' : refresh ? '开始安全刷新' : '开始添加'}
             </button>
-            {message && <p className="form-message status-error">{message}</p>}
+            {message && <div className="form-message status-error" role="alert"><p>操作未完成，请检查后重试。</p><details><summary>错误详情</summary>{message}</details></div>}
             {runs.length > 0 && (
               <label className="field run-select">
                 <span className="field-label">任务记录</span>
                 <select value={selectedRun?.id ?? ''} onChange={(event) => setSelectedRunId(event.target.value)}>
-                  {runs.map((run) => <option value={run.id} key={run.id}>{new Date(run.createdAt).toLocaleString()} · {run.state}</option>)}
+                  {runs.map((run) => <option value={run.id} key={run.id}>{new Date(run.createdAt).toLocaleString()} · {runLabel[run.state]}</option>)}
                 </select>
               </label>
             )}
@@ -191,24 +219,26 @@ export function AddPapersDialog({
             {selectedRun ? (
               <>
                 <div className="run-header">
-                  <div><span className={`run-state ${selectedRun.state}`}>{selectedRun.state}</span><small>{selectedRun.id}</small></div>
+                  <div><span className={`run-state ${selectedRun.state}`}>{runLabel[selectedRun.state]}</span></div>
                   <div className="button-row">
                     {['queued', 'running', 'cancelling'].includes(selectedRun.state) && (
-                      <button type="button" disabled={selectedRun.state === 'cancelling'} onClick={() => void bridge().fetch.cancel(project.id, selectedRun.id).then(updateRun).catch((error) => setMessage(errorMessage(error)))}>取消整批</button>
+                      <button type="button" disabled={submitting || Boolean(pendingAction) || selectedRun.state === 'cancelling'} onClick={() => void runAction('cancel', selectedRun)}>取消整批</button>
                     )}
                     {['interrupted', 'cancelled', 'completed'].includes(selectedRun.state) && selectedRun.items.some((item) => ['failed', 'cancelled', 'action_required'].includes(item.state)) && (
-                      <button type="button" onClick={() => void bridge().fetch.resume(project.id, selectedRun.id).then(updateRun)}>从 manifest 恢复</button>
+                      <button type="button" disabled={submitting || Boolean(pendingAction)} onClick={() => void runAction('resume', selectedRun)}>继续未完成项</button>
                     )}
                   </div>
                 </div>
                 <p className="fetch-summary" aria-live="polite">
-                  已结束 {selectedRun.items.filter((item) => item.stage === 'terminal').length}/{selectedRun.items.length}
+                  已结束 {counts.ended}/{selectedRun.items.length}
                   {(['complete', 'degraded', 'failed', 'limited', 'action_required', 'cancelled'] as const).map((state) => (
-                    <span key={state}> · {state === 'complete' ? '成功' : stateLabel[state]} {selectedRun.items.filter((item) => item.state === state).length}</span>
+                    counts[state] > 0 && <span key={state}> · {state === 'complete' ? '成功' : stateLabel[state]} {counts[state]}</span>
                   ))}
                 </p>
-                <ol className="fetch-items">
-                  {selectedRun.items.map((item) => (
+                {pendingAction && <p role="status">{pendingAction === 'resume' ? '正在继续未完成项…' : '正在取消…'}</p>}
+                <details><summary>任务详情</summary><p>任务 ID：{selectedRun.id}</p><p>{selectedRun.manifestPath}</p></details>
+                <ol className="fetch-items" start={page * 50 + 1}>
+                  {selectedRun.items.slice(page * 50, (page + 1) * 50).map((item) => (
                     <li key={item.index} className={`fetch-item ${item.state}`}>
                       <div className="fetch-item-title">
                         <span className="index">{item.index}</span>
@@ -217,10 +247,11 @@ export function AddPapersDialog({
                         </strong>
                         <span className="item-state">{stateLabel[item.state]}</span>
                       </div>
+                      <div className="fetch-meta"><span>{stageLabel[item.stage]}</span></div>
+                      <details><summary>详情</summary>
                       <div className="fetch-meta">
-                        <span>{stageLabel[item.stage]}</span>
-                        {item.stage !== 'terminal' && item.stageStartedAt && (
-                          <span>{Math.max(0, Math.floor((tick - Date.parse(item.stageStartedAt)) / 1_000))} 秒</span>
+                        {item.state === 'running' && item.stageStartedAt && (
+                          <StageElapsed startedAt={item.stageStartedAt} />
                         )}
                         {item.assetProgress?.counts.map((count) => (
                           <span key={count.kind}>{assetLabel[count.kind]} 已处理 {count.completed}/{count.total ?? '未知'}{count.failed > 0 ? `，失败 ${count.failed}` : ''}</span>
@@ -232,22 +263,24 @@ export function AddPapersDialog({
                       {item.outputPath && <p className="fetch-artifact"><strong>产物：</strong>{item.outputPath}</p>}
                       {item.outputSha256 && <p className="fetch-artifact"><strong>SHA-256：</strong><code>{item.outputSha256}</code></p>}
                       {item.reason && <p>{item.reason}</p>}
+                      </details>
                       <div className="button-row">
                         {['queued', 'running', 'cancelling'].includes(selectedRun.state) && !['terminal', 'acceptance'].includes(item.stage) && (
-                          <button type="button" disabled={item.state === 'cancelling'} onClick={() => void cancelItem(selectedRun, item.index)}>
-                            {item.state === 'cancelling' ? '取消中' : '取消此篇'}
+                          <button type="button" disabled={submitting || Boolean(pendingAction) || item.state === 'cancelling'} onClick={() => void runAction('item', selectedRun, item.index)}>
+                            {item.state === 'cancelling' || pendingAction === `item:${item.index}` ? '取消中' : '取消此篇'}
                           </button>
                         )}
                         {item.existingPaperId && (
                           <button type="button" onClick={() => onOpenPaper(item.existingPaperId ?? '')}>打开现有条目</button>
                         )}
                         {item.reason?.includes('paper-fetch auth') && (
-                          <button type="button" onClick={() => void bridge().system.copyText(item.reason ?? '')}>复制人工命令</button>
+                          <button type="button" onClick={() => void bridge().system.copyText(item.reason ?? '').catch((error) => setMessage(errorMessage(error)))}>复制人工命令</button>
                         )}
                         {item.candidates.map((candidate) => (
                           <button
                             type="button"
                             key={`${candidate.doi}-${candidate.url}`}
+                            disabled={submitting || Boolean(pendingAction)}
                             onClick={() => void create(candidate.doi ?? candidate.url ?? candidate.title)}
                           >
                             选择：<FormattedTitle>{candidate.title}</FormattedTitle>
@@ -257,13 +290,17 @@ export function AddPapersDialog({
                     </li>
                   ))}
                 </ol>
+                {selectedRun.items.length > 50 && <div className="button-row fetch-pagination">
+                  <button type="button" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>上一页</button>
+                  <span>{page + 1} / {Math.ceil(selectedRun.items.length / 50)}</span>
+                  <button type="button" disabled={(page + 1) * 50 >= selectedRun.items.length} onClick={() => setPage((value) => value + 1)}>下一页</button>
+                </div>}
               </>
             ) : (
               <div className="empty-state compact"><p>尚无抓取任务。</p></div>
             )}
           </div>
         </div>
-      </section>
-    </div>
+    </dialog>
   )
 }
