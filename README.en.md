@@ -8,7 +8,7 @@ It deliberately provides only six capabilities:
 
 - edit core bibliographic metadata and run project-local FTS5 search with a year filter;
 - safely render paper-fetch Markdown, local body images, GFM tables, code, and KaTeX math;
-- invoke the official `paper-fetch fetch` command for one paper or batches of up to 50;
+- invoke the official `paper-fetch fetch` command for one paper or batches without a fixed item count limit;
 - register multiple projects while strictly scoping every browse, search, fetch, and note operation to the active project;
 - store project and per-paper notes as ordinary Markdown inside the project.
 - review papers recently registered by Crossref in the global Journal Radar and send up to 50 of them through the existing paper-fetch workflow.

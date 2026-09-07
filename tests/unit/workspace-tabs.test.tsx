@@ -7,6 +7,7 @@ import type {
   LitRootBridge,
   PaperDetail,
   PaperSearchRequest,
+  PaperSearchResult,
   ProjectSummary,
   ServiceEvent
 } from '../../src/shared/contracts.js'
@@ -189,6 +190,121 @@ afterEach(async () => {
 })
 
 describe('workspace tabs', () => {
+  it.each([20, 50, 100, 200])('uses %i items per page while retaining filters and clearing multiselection', async (pageSize) => {
+    await act(async () => root.unmount())
+    const allItems = Array.from({ length: pageSize + 53 }, (_, index) => (
+      paper(`paper_${String(index).padStart(24, '0')}`, `Paper ${index}`, 2024)
+    ))
+    const mock = bridgeMock()
+    mock.papers.search = async (request) => {
+      requests.push(request)
+      return { items: allItems.slice(request.offset, request.offset + request.limit), total: allItems.length, years: [2024] }
+    }
+    window.litroot = transportFor(mock)
+    root = createRoot(container)
+    await act(async () => root.render(<App />))
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+    expect(select.value).toBe('50')
+    expect([...select.options].map((option) => option.value)).toEqual(['20', '50', '100', '200'])
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="全文搜索"]')!
+    const year = container.querySelector<HTMLSelectElement>('select[aria-label="年份筛选"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'Paper')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+      year.value = '2024'
+      year.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 270)) })
+    await act(async () => {
+      [...container.querySelectorAll<HTMLButtonElement>('.table-column-header button')]
+        .find((button) => button.textContent?.includes('标题'))!.click()
+    })
+    const [previous, next] = container.querySelectorAll<HTMLButtonElement>('.library-footer button')
+    await act(async () => next!.click())
+    expect(requests.at(-1)).toMatchObject({ limit: 50, offset: 50 })
+    const rows = container.querySelectorAll<HTMLElement>('.paper-row')
+    await act(async () => rows[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })))
+    expect(container.querySelectorAll('.paper-row[aria-selected="true"]')).toHaveLength(2)
+    await act(async () => {
+      select.value = String(pageSize)
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(requests.at(-1)).toMatchObject({ limit: pageSize, offset: 0, query: 'Paper', year: 2024, sortBy: 'title', sortDirection: 'desc' })
+    expect(search.value).toBe('Paper')
+    expect(year.value).toBe('2024')
+    expect(container.querySelectorAll('.paper-row')).toHaveLength(pageSize)
+    expect(container.querySelectorAll('.paper-row[aria-selected="true"]')).toHaveLength(1)
+    expect(previous!.disabled).toBe(true)
+    expect(container.querySelector('.library-footer > span')?.textContent).toBe(`1–${pageSize} / ${allItems.length}`)
+    for (let offset = pageSize; offset < allItems.length; offset += pageSize) {
+      await act(async () => next!.click())
+      expect(requests.at(-1)).toMatchObject({ limit: pageSize, offset })
+      expect(container.querySelector('.library-footer > span')?.textContent)
+        .toBe(`${offset + 1}–${Math.min(offset + pageSize, allItems.length)} / ${allItems.length}`)
+      expect(container.querySelector('.library-footer > div > span')?.textContent)
+        .toBe(`${offset / pageSize + 1} / ${Math.ceil(allItems.length / pageSize)}`)
+    }
+    expect(next!.disabled).toBe(true)
+    await act(async () => previous!.click())
+    expect(requests.at(-1)?.offset).toBe((Math.ceil(allItems.length / pageSize) - 2) * pageSize)
+
+    await act(async () => {
+      [...container.querySelectorAll<HTMLButtonElement>('.project-main')]
+        .find((button) => button.textContent?.includes('Project Two'))!.click()
+    })
+    expect(requests.at(-1)).toMatchObject({ projectId: PROJECT_TWO, limit: pageSize, offset: 0 })
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(<App />))
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')?.value).toBe(String(pageSize))
+    expect(requests.at(-1)).toMatchObject({ limit: pageSize, offset: 0 })
+  })
+
+  it('keeps library and radar page sizes independent across remounts', async () => {
+    const librarySelect = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+    await act(async () => {
+      librarySelect.value = '200'
+      librarySelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => container.querySelector<HTMLButtonElement>('.feed-sidebar-entry')!.click())
+    const feedSelect = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+    expect(feedSelect.value).toBe('50')
+    await act(async () => {
+      feedSelect.value = '20'
+      feedSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(<App />))
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')?.value).toBe('200')
+    await act(async () => container.querySelector<HTMLButtonElement>('.feed-sidebar-entry')!.click())
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')?.value).toBe('20')
+  })
+
+  it('ignores a stale page size response and displays empty pagination', async () => {
+    await act(async () => root.unmount())
+    let resolveOld!: (result: PaperSearchResult) => void
+    const old = new Promise<PaperSearchResult>((resolve) => { resolveOld = resolve })
+    const mock = bridgeMock()
+    const search = vi.fn().mockReturnValueOnce(old).mockResolvedValue({ items: [], total: 0, years: [] })
+    mock.papers.search = search
+    window.litroot = transportFor(mock)
+    root = createRoot(container)
+    await act(async () => root.render(<App />))
+    await act(async () => {
+      const select = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+      select.value = '100'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 100, offset: 0 }))
+    await act(async () => resolveOld({ items: [firstPaper], total: 1, years: [2024] }))
+    expect(container.querySelectorAll('.paper-row')).toHaveLength(0)
+    expect(container.querySelector('.library-footer > span')?.textContent).toBe('无文献')
+    expect(container.querySelector('.library-footer > div > span')?.textContent).toBe('0 / 1')
+    expect([...container.querySelectorAll<HTMLButtonElement>('.library-footer button')].every((button) => button.disabled)).toBe(true)
+    expect(container.querySelector('.library-table-frame')?.getAttribute('aria-busy')).toBe('false')
+  })
+
   it('shows the inspector only in paper reader tabs and does not load details on selection', async () => {
     const firstRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_ONE}"]`))
     const thirdRow = await waitFor(() => container.querySelector<HTMLElement>(`[data-paper-id="${PAPER_THREE}"]`))

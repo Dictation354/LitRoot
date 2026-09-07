@@ -8,7 +8,7 @@ LitRoot 是一个以项目目录为事实来源、面向 paper-fetch Markdown �
 
 - 编辑论文核心元数据，并在当前项目内执行 FTS5 全文搜索和年份筛选；
 - 安全渲染 paper-fetch Markdown、正文图片、GFM 表格、代码和 KaTeX 数学公式；
-- 通过 GUI 单篇或最多 50 条批量调用官方 `paper-fetch fetch`；
+- 通过 GUI 单篇或批量调用官方 `paper-fetch fetch`，批量条目数量不设固定上限；
 - 注册多个项目，但浏览、搜索、抓取和笔记始终限定在当前项目；
 - 把项目总笔记和逐篇笔记直接保存为项目内 Markdown。
 - 在全局“期刊雷达”中查看 Crossref 最近登记的文献，并将最多 50 条交给现有 paper-fetch 流程。

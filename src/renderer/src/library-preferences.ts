@@ -28,6 +28,7 @@ export interface LibraryPreferences {
   columns: LibraryColumnPreference[]
   sortBy: PaperSortField
   sortDirection: SortDirection
+  pageSize: number
 }
 
 interface PreferenceStorage {
@@ -65,7 +66,8 @@ export function defaultLibraryPreferences(): LibraryPreferences {
     version: 1,
     columns: LIBRARY_COLUMN_KEYS.map((key) => ({ key, ...COLUMN_DEFAULTS[key] })),
     sortBy: 'title',
-    sortDirection: 'asc'
+    sortDirection: 'asc',
+    pageSize: 50
   }
 }
 
@@ -115,7 +117,10 @@ export function normalizeLibraryPreferences(value: unknown): LibraryPreferences 
     sortBy: SORT_FIELDS.has(candidate.sortBy as PaperSortField)
       ? candidate.sortBy as PaperSortField
       : defaults.sortBy,
-    sortDirection: candidate.sortDirection === 'desc' ? 'desc' : 'asc'
+    sortDirection: candidate.sortDirection === 'desc' ? 'desc' : 'asc',
+    pageSize: typeof candidate.pageSize === 'number' && [20, 50, 100, 200].includes(candidate.pageSize)
+      ? candidate.pageSize
+      : defaults.pageSize
   }
 }
 

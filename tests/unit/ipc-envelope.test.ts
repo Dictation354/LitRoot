@@ -203,6 +203,8 @@ it('validates item cancellation indexes before forwarding over IPC', async () =>
   const handler = electron.handlers.get(IPC.fetchCancelItem)!
   await handler(event(), 'project_aaaaaaaaaaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbbbbbbbbbb', 2)
   expect(cancelFetchItem).toHaveBeenCalledWith('project_aaaaaaaaaaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbbbbbbbbbb', 2)
-  for (const index of [0, 51, 1.5, '1']) await handler(event(), 'project_aaaaaaaaaaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbbbbbbbbbb', index)
-  expect(cancelFetchItem).toHaveBeenCalledTimes(1)
+  await handler(event(), 'project_aaaaaaaaaaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbbbbbbbbbb', 51)
+  expect(cancelFetchItem).toHaveBeenCalledWith('project_aaaaaaaaaaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbbbbbbbbbb', 51)
+  for (const index of [0, -1, 1.5, '1']) await handler(event(), 'project_aaaaaaaaaaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbbbbbbbbbb', index)
+  expect(cancelFetchItem).toHaveBeenCalledTimes(2)
 })

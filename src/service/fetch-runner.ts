@@ -33,10 +33,10 @@ const progressBase = z.object({
   paper_fetch_progress: z.literal(true),
   protocol_version: z.literal(1),
   run_id: z.string().min(1).max(100),
-  index: z.number().int().min(0).max(50)
+  index: z.number().int().min(0)
 })
 const progressEventSchema = z.discriminatedUnion('type', [
-  progressBase.extend({ type: z.literal('run_started'), index: z.literal(0), total: z.number().int().min(1).max(50) }),
+  progressBase.extend({ type: z.literal('run_started'), index: z.literal(0), total: z.number().int().min(1) }),
   progressBase.extend({ type: z.literal('stage'), stage: z.enum(['queued', 'identity', 'fetching', 'assets', 'validating', 'writing']) }),
   progressBase.extend({ type: z.literal('assets'), ...fetchAssetProgressSchema.shape }),
   progressBase.extend({ type: z.literal('terminal'), record: z.object({ index: z.number().int().positive(), run_id: z.string().min(1) }).passthrough() }),

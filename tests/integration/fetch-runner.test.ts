@@ -76,11 +76,12 @@ describe('paper-fetch task orchestration', () => {
     await project.close()
   })
 
-  it('reports CLI startup errors and restores a saved batch without a paper-fetch manifest', async () => {
+  it('reports CLI startup errors and restores a batch of more than 50 items without a paper-fetch manifest', async () => {
     const { project, executable } = await fixture()
     process.env.PAPER_FETCH_TEST_FAILURE = 'paper-fetch: error: unrecognized arguments: --run-manifest'
+    const inputs = Array.from({ length: 51 }, (_, index) => `10.5555/paper-${index}`)
     const created = await project.fetch.create({
-      projectId: project.layout.id, inputs: ['10.5555/first', '10.5555/second']
+      projectId: project.layout.id, inputs
     })
     const failed = await terminal(project, created.id)
     for (const item of failed.items) {
@@ -96,8 +97,9 @@ describe('paper-fetch task orchestration', () => {
     await reopened.start()
     await reopened.fetch.resume(created.id)
     const finished = await terminal(reopened, created.id)
-    expect(finished.items.map((item) => item.state)).toEqual(['complete', 'complete'])
-    expect(finished.items.map((item) => item.attempt)).toEqual([2, 2])
+    expect(finished.items.map((item) => item.query)).toEqual(inputs)
+    expect(finished.items.map((item) => item.state)).toEqual(inputs.map(() => 'complete'))
+    expect(finished.items.map((item) => item.attempt)).toEqual(inputs.map(() => 2))
     await reopened.close()
   })
 

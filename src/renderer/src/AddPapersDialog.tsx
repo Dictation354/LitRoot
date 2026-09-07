@@ -159,7 +159,7 @@ export function AddPapersDialog({
                 onChange={(event) => setInput(event.target.value)}
                 rows={12}
                 readOnly={Boolean(refresh)}
-                placeholder={'每行一条，最多 50 条\n10.1145/…\nhttps://arxiv.org/abs/…'}
+                placeholder={'每行一条\n10.1145/…\nhttps://arxiv.org/abs/…'}
               />
             </label>
             <div className="field inline-field">

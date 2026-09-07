@@ -9,7 +9,7 @@ import type {
 import { bridge, errorMessage } from './bridge'
 import { FormattedTitle } from './FormattedTitle'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE_KEY = 'litroot.feed-page-size'
 type FeedDays = 1 | 3 | 7 | 14 | 30
 
 function authors(value: string[]): string {
@@ -39,6 +39,14 @@ export function FeedInbox({
   const [items, setItems] = useState<FeedItem[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const value: unknown = JSON.parse(window.localStorage.getItem(PAGE_SIZE_KEY) ?? 'null')
+      return typeof value === 'number' && [20, 50, 100, 200].includes(value) ? value : 50
+    } catch {
+      return 50
+    }
+  })
   const [selected, setSelected] = useState<string[]>([])
   const [focusedId, setFocusedId] = useState('')
   const [projectId, setProjectId] = useState('')
@@ -56,6 +64,14 @@ export function FeedInbox({
   )
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(PAGE_SIZE_KEY, String(pageSize))
+    } catch {
+      // Pagination remains usable when browser preferences are unavailable.
+    }
+  }, [pageSize])
+
+  useEffect(() => {
     setOffset(0)
     setSelected([])
     setFocusedId('')
@@ -71,7 +87,7 @@ export function FeedInbox({
     void bridge().feeds.items({
       subscriptionId: scope === 'recent' ? null : scope,
       days,
-      limit: PAGE_SIZE,
+      limit: pageSize,
       offset
     }).then((result) => {
       if (cancelled) return
@@ -82,7 +98,7 @@ export function FeedInbox({
     }).catch((error) => { if (!cancelled) onMessage(errorMessage(error)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [days, scope, offset, revision, onMessage])
+  }, [days, scope, offset, pageSize, revision, onMessage])
 
   const focus = (item: FeedItem, toggle = false): void => {
     setFocusedId(item.id)
@@ -174,10 +190,17 @@ export function FeedInbox({
           {!loading && items.length === 0 && <div className="empty-state"><h2>这段时间没有文献</h2><p>Crossref 登记的新文献会在刷新期刊后出现。</p></div>}
         </div>
         <footer className="library-footer">
-          <span>{total === 0 ? '无条目' : `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} / ${total}`}</span>
+          <span>{total === 0 ? '无条目' : `${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}`}</span>
           <div>
-            <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>上一页</button>
-            <button type="button" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>下一页</button>
+            <label>每页条数 <select aria-label="每页条数" value={pageSize} onChange={(event) => {
+              setPageSize(Number(event.target.value))
+              setOffset(0)
+              setSelected([])
+            }}>
+              {[20, 50, 100, 200].map((value) => <option value={value} key={value}>{value}</option>)}
+            </select></label>
+            <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一页</button>
+            <button type="button" disabled={offset + pageSize >= total} onClick={() => setOffset(offset + pageSize)}>下一页</button>
           </div>
         </footer>
       </section>

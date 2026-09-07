@@ -5,6 +5,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   FeedItem,
+  FeedItemsRequest,
+  FeedItemsResult,
   FeedSubscription,
   JournalCandidate,
   LitRootBridge,
@@ -59,6 +61,7 @@ async function enter(input: HTMLInputElement, value: string): Promise<void> {
 }
 
 beforeEach(() => {
+  window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -68,9 +71,123 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   delete window.litroot
+  vi.restoreAllMocks()
 })
 
 describe('Feed inbox', () => {
+  it.each([20, 50, 100, 200])('paginates with %i items, resets selection and restores the independent setting', async (pageSize) => {
+    const allItems = Array.from({ length: pageSize + 53 }, (_, index) => ({
+      ...items[0]!, id: `feeditem_${String(index).padStart(24, '0')}`, title: `Paper ${index}`
+    }))
+    const requestItems = vi.fn(async ({ limit = 50, offset = 0 }: FeedItemsRequest) => ({
+      items: allItems.slice(offset, offset + limit), total: allItems.length
+    }))
+    window.localStorage.setItem('litroot.library-preferences.v1', '{"pageSize":100}')
+    window.litroot = transportFor({
+      feeds: { items: requestItems, markRead: vi.fn(async () => undefined) }
+    } as unknown as LitRootBridge)
+    const onMessage = vi.fn()
+    const renderInbox = (scope = 'recent') => <FeedInbox scope={scope} feeds={[subscription]} projects={projects}
+      event={null} onFetchCreated={vi.fn()} onMessage={onMessage} />
+    await act(async () => root.render(renderInbox()))
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+    expect(select.value).toBe('50')
+    expect([...select.options].map((option) => option.value)).toEqual(['20', '50', '100', '200'])
+    const range = container.querySelector<HTMLSelectElement>('select[aria-label="登记时间范围"]')!
+    await act(async () => {
+      range.value = '14'
+      range.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const [previous, next] = container.querySelectorAll<HTMLButtonElement>('.library-footer button')
+    await act(async () => next!.click())
+    expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: null, days: 14, limit: 50, offset: 50 })
+    const rows = container.querySelectorAll<HTMLElement>('.feed-row')
+    await act(async () => rows[0]!.click())
+    await act(async () => rows[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })))
+    expect(container.textContent).toContain('已选 2/50')
+    await act(async () => {
+      select.value = String(pageSize)
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: null, days: 14, limit: pageSize, offset: 0 })
+    expect(container.querySelectorAll('.feed-row')).toHaveLength(pageSize)
+    expect(container.textContent).toContain('已选 0/50')
+    expect(previous!.disabled).toBe(true)
+    expect(container.querySelector('.library-footer > span')?.textContent).toBe(`1–${pageSize} / ${allItems.length}`)
+    for (let offset = pageSize; offset < allItems.length; offset += pageSize) {
+      await act(async () => next!.click())
+      expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: null, days: 14, limit: pageSize, offset })
+      expect(container.querySelector('.library-footer > span')?.textContent)
+        .toBe(`${offset + 1}–${Math.min(offset + pageSize, allItems.length)} / ${allItems.length}`)
+    }
+    expect(next!.disabled).toBe(true)
+    await act(async () => previous!.click())
+    expect(requestItems.mock.lastCall?.[0].offset).toBe((Math.ceil(allItems.length / pageSize) - 2) * pageSize)
+    await act(async () => root.render(renderInbox(subscription.id)))
+    expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: subscription.id, days: 14, limit: pageSize, offset: 0 })
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(renderInbox()))
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')?.value).toBe(String(pageSize))
+    expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: null, days: 7, limit: pageSize, offset: 0 })
+    expect(window.localStorage.getItem('litroot.library-preferences.v1')).toBe('{"pageSize":100}')
+  })
+
+  it.each([null, 'broken', 'null', '"100"', '21', '201', '50.5'])('defaults invalid storage (%s) to 50 and shows empty pagination', async (stored) => {
+    if (stored !== null) window.localStorage.setItem('litroot.feed-page-size', stored)
+    const requestItems = vi.fn(async () => ({ items: [], total: 0 }))
+    window.litroot = transportFor({ feeds: { items: requestItems } } as unknown as LitRootBridge)
+    await act(async () => root.render(<FeedInbox scope="recent" feeds={[]} projects={[]} event={null}
+      onFetchCreated={vi.fn()} onMessage={vi.fn()} />))
+    expect(requestItems).toHaveBeenCalledWith({ subscriptionId: null, days: 7, limit: 50, offset: 0 })
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')?.value).toBe('50')
+    expect(container.querySelector('.library-footer > span')?.textContent).toBe('无条目')
+    expect([...container.querySelectorAll<HTMLButtonElement>('.library-footer button')].every((button) => button.disabled)).toBe(true)
+  })
+
+  it('ignores a stale response after changing page size and keeps the selection cap at 50', async () => {
+    let resolveOld!: (result: FeedItemsResult) => void
+    const old = new Promise<FeedItemsResult>((resolve) => { resolveOld = resolve })
+    const newItems = Array.from({ length: 100 }, (_, index) => ({
+      ...items[0]!, id: `feeditem_${String(index).padStart(24, '0')}`, title: `New ${index}`
+    }))
+    const requestItems = vi.fn().mockReturnValueOnce(old).mockResolvedValue({ items: newItems, total: 100 })
+    window.litroot = transportFor({ feeds: { items: requestItems, markRead: vi.fn(async () => undefined) } } as unknown as LitRootBridge)
+    await act(async () => root.render(<FeedInbox scope="recent" feeds={[]} projects={[]} event={null}
+      onFetchCreated={vi.fn()} onMessage={vi.fn()} />))
+    await act(async () => {
+      const select = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+      select.value = '100'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => resolveOld({ items, total: 2 }))
+    expect(container.querySelectorAll('.feed-row')).toHaveLength(100)
+    expect(container.querySelector('.library-footer > span')?.textContent).toBe('1–100 / 100')
+    expect(container.querySelector('.feed-list')?.getAttribute('aria-busy')).toBe('false')
+    for (const checkbox of [...container.querySelectorAll<HTMLInputElement>('.feed-row input')].slice(0, 51)) {
+      await act(async () => checkbox.click())
+    }
+    expect(container.querySelectorAll('.feed-row input:checked')).toHaveLength(50)
+    expect(container.textContent).toContain('已选 50/50')
+  })
+
+  it('continues pagination when preference reads and writes fail', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('unavailable') })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('unavailable') })
+    const requestItems = vi.fn(async () => ({ items: [], total: 0 }))
+    window.litroot = transportFor({ feeds: { items: requestItems } } as unknown as LitRootBridge)
+    await act(async () => root.render(<FeedInbox scope="recent" feeds={[]} projects={[]} event={null}
+      onFetchCreated={vi.fn()} onMessage={vi.fn()} />))
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="每页条数"]')!
+    expect(select.value).toBe('50')
+    await act(async () => {
+      select.value = '200'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(select.value).toBe('200')
+    expect(requestItems).toHaveBeenLastCalledWith({ subscriptionId: null, days: 7, limit: 200, offset: 0 })
+  })
+
   it('defaults to seven days, marks opened items read, and hands selected inputs to an eligible project', async () => {
     const markRead = vi.fn(async () => undefined)
     const create = vi.fn(async () => ({ id: 'run_ffffffffffffffffffffffff' }))

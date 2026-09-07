@@ -448,6 +448,7 @@ function WorkspaceApp() {
               }}
               onExport={(paperIds, includeImages) => { void exportPapers(paperIds, includeImages) }}
               onPageChange={changePage}
+              onPageSizeChange={library.changePageSize}
             />
           )}
         </main>

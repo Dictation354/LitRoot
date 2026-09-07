@@ -15,7 +15,6 @@ import {
   saveLibraryPreferences
 } from './library-preferences'
 
-export const PAGE_SIZE = 50
 export const LIBRARY_TAB_KEY = 'library'
 export const MIN_SIDEBAR_WIDTH = 180
 export const MAX_SIDEBAR_WIDTH = 420
@@ -104,7 +103,7 @@ export function useLibraryWorkspace({
       year,
       sortBy: preferences.sortBy,
       sortDirection: preferences.sortDirection,
-      limit: PAGE_SIZE,
+      limit: preferences.pageSize,
       offset
     }).then((result) => {
       if (cancelled) return
@@ -137,6 +136,7 @@ export function useLibraryWorkspace({
     offset,
     preferences.sortBy,
     preferences.sortDirection,
+    preferences.pageSize,
     revision,
     onMessage
   ])
@@ -165,6 +165,12 @@ export function useLibraryWorkspace({
 
   const changePage = (nextOffset: number): void => {
     setOffset(nextOffset)
+    clearSelection()
+  }
+
+  const changePageSize = (pageSize: number): void => {
+    setPreferences((current) => ({ ...current, pageSize }))
+    setOffset(0)
     clearSelection()
   }
 
@@ -201,6 +207,7 @@ export function useLibraryWorkspace({
     resetFilters,
     changeSort,
     changePage,
+    changePageSize,
     replacePaper
   }
 }

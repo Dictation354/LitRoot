@@ -48,14 +48,18 @@ describe('localhost service security', () => {
     })
     expect(browserOrigin.status).toBe(403)
     const client = new LitRootServiceClient(`http://127.0.0.1:${port}`, token)
-    const run = await client.createFetch({ projectId: project.id, inputs: ['slow HTTP cancel', '10.5555/other'] })
-    const endpoint = `${base}/projects/${project.id}/fetch/${run.id}/items/1/cancel`
+    const inputs = [...Array.from({ length: 49 }, (_, index) => `failed paper ${index}`), '10.5555/other', 'slow HTTP cancel']
+    const run = await client.createFetch({ projectId: project.id, inputs })
+    expect(run.items.map((item) => item.query)).toEqual(inputs)
+    const endpoint = `${base}/projects/${project.id}/fetch/${run.id}/items/51/cancel`
     expect((await fetch(endpoint, { method: 'POST' })).status).toBe(401)
     await expect(client.cancelFetchItem(project.id, run.id, 0)).rejects.toMatchObject({ status: 400 })
-    await expect(client.cancelFetchItem(project.id, run.id, 3)).rejects.toMatchObject({ status: 404 })
-    expect((await client.cancelFetchItem(project.id, run.id, 1)).items[0]?.state).toBe('cancelling')
+    await expect(client.cancelFetchItem(project.id, run.id, 52)).rejects.toMatchObject({ status: 404 })
+    await waitFor(() => registry.require(project.id).fetch.get(run.id).items[50]?.assetProgress !== null)
+    expect((await client.getFetch(project.id, run.id)).items[50]?.stage).toBe('assets')
+    expect((await client.cancelFetchItem(project.id, run.id, 51)).items[50]?.state).toBe('cancelling')
     await waitFor(() => registry.require(project.id).fetch.get(run.id).state === 'completed')
-    expect((await client.getFetch(project.id, run.id)).items.map((item) => item.state)).toEqual(['cancelled', 'complete'])
+    expect((await client.getFetch(project.id, run.id)).items.map((item) => item.state)).toEqual([...Array(49).fill('failed'), 'complete', 'cancelled'])
     await server.close()
     await registry.close()
   })

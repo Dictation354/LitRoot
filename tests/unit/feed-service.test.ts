@@ -68,6 +68,8 @@ describe('Crossref parsing and contracts', () => {
 
   it('normalizes request defaults and rejects invalid values', () => {
     expect(feedItemsRequestSchema.parse({})).toMatchObject({ days: 7, limit: 50, offset: 0 })
+    expect(feedItemsRequestSchema.parse({ limit: 200 }).limit).toBe(200)
+    expect(() => feedItemsRequestSchema.parse({ limit: 201 })).toThrow()
     for (const days of [1, 3, 7, 14, 30]) expect(feedItemsRequestSchema.parse({ days }).days).toBe(days)
     expect(() => feedItemsRequestSchema.parse({ days: 2 })).toThrow()
     expect(() => feedItemsRequestSchema.parse({ subscriptionId: 'feed_bad' })).toThrow()
@@ -296,6 +298,38 @@ describe('Crossref refresh and database', () => {
     expect(overview.items.some((item) => item.readAt)).toBe(true)
     expect(overview.items.some((item) => !item.readAt)).toBe(true)
     expect(service.items({ subscriptionId: `feed_${'b'.repeat(24)}`, days: 7, limit: 50, offset: 0 }).total).toBe(1)
+    service.close()
+  })
+
+  it('paginates up to 200 items with stable offsets and totals', async () => {
+    const { service, databasePath } = await serviceAndPath()
+    const database = new DatabaseSync(databasePath)
+    const subscriptionId = `feed_${'a'.repeat(24)}`
+    database.prepare(`INSERT INTO subscriptions (
+      id, issn, issns_json, title, publisher
+    ) VALUES (?, '0034-4257', '["0034-4257"]', 'Journal', '')`).run(subscriptionId)
+    const insert = database.prepare(`INSERT INTO items (
+      id, subscription_id, doi, title, authors_json, summary, url, published_at, discovered_at, read_at
+    ) VALUES (?, ?, ?, ?, '[]', '', '', NULL, ?, NULL)`)
+    const discoveredAt = new Date().toISOString()
+    for (let index = 0; index < 205; index += 1) {
+      insert.run(`feeditem_${String(index).padStart(24, '0')}`, subscriptionId,
+        `10.1234/${String(index).padStart(3, '0')}`, `Paper ${index}`, discoveredAt)
+    }
+    database.close()
+
+    for (const limit of [20, 50, 100, 200]) {
+      const first = service.items(feedItemsRequestSchema.parse({ subscriptionId, limit }))
+      const next = service.items(feedItemsRequestSchema.parse({ subscriptionId, limit, offset: limit }))
+      expect(first.total).toBe(205)
+      expect(first.items).toHaveLength(limit)
+      expect(first.items[0]?.title).toBe('Paper 0')
+      expect(next.total).toBe(205)
+      expect(next.items).toHaveLength(Math.min(limit, 205 - limit))
+      expect(next.items[0]?.title).toBe(`Paper ${limit}`)
+    }
+    expect(service.items(feedItemsRequestSchema.parse({ limit: 200, offset: 205 })))
+      .toEqual({ items: [], total: 205 })
     service.close()
   })
 

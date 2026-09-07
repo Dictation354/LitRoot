@@ -254,7 +254,7 @@ export class LitRootHttpServer {
         return
       }
       if (method === 'POST' && path[4] === 'items' && path[6] === 'cancel' && path.length === 7) {
-        const index = z.coerce.number().int().min(1).max(50).parse(path[5])
+        const index = z.coerce.number().int().min(1).parse(path[5])
         sendJson(response, 200, await project.fetch.cancelItem(selectedRunId, index))
         return
       }

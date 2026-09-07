@@ -26,7 +26,6 @@ import {
   MIN_INSPECTOR_WIDTH,
   MIN_MAIN_WIDTH,
   MIN_SIDEBAR_WIDTH,
-  PAGE_SIZE,
   RESIZER_WIDTH,
   type PaperTab
 } from './workspace-hooks'
@@ -393,7 +392,8 @@ export function LibraryWorkspace({
   onReveal,
   onBatchRefresh,
   onExport,
-  onPageChange
+  onPageChange,
+  onPageSizeChange
 }: {
   project: ProjectSummary
   items: PaperListItem[]
@@ -421,7 +421,9 @@ export function LibraryWorkspace({
   onBatchRefresh(papers: PaperListItem[], skippedCount: number): void
   onExport(paperIds: string[], includeImages: boolean): void
   onPageChange(offset: number): void
+  onPageSizeChange(pageSize: number): void
 }) {
+  const pageSize = preferences.pageSize
   return (
     <section className="library-main">
       <header className="library-toolbar">
@@ -476,11 +478,14 @@ export function LibraryWorkspace({
         onExport={onExport}
       />
       <footer className="library-footer">
-        <span>{total === 0 ? '无文献' : `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} / ${total}`}</span>
+        <span>{total === 0 ? '无文献' : `${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}`}</span>
         <div>
-          <button type="button" disabled={offset === 0} onClick={() => onPageChange(Math.max(0, offset - PAGE_SIZE))}>上一页</button>
-          <span>{total === 0 ? 0 : Math.floor(offset / PAGE_SIZE) + 1} / {Math.max(1, Math.ceil(total / PAGE_SIZE))}</span>
-          <button type="button" disabled={offset + PAGE_SIZE >= total} onClick={() => onPageChange(offset + PAGE_SIZE)}>下一页</button>
+          <label>每页条数 <select aria-label="每页条数" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
+            {[20, 50, 100, 200].map((value) => <option value={value} key={value}>{value}</option>)}
+          </select></label>
+          <button type="button" disabled={offset === 0} onClick={() => onPageChange(Math.max(0, offset - pageSize))}>上一页</button>
+          <span>{total === 0 ? 0 : Math.floor(offset / pageSize) + 1} / {Math.max(1, Math.ceil(total / pageSize))}</span>
+          <button type="button" disabled={offset + pageSize >= total} onClick={() => onPageChange(offset + pageSize)}>下一页</button>
         </div>
       </footer>
     </section>

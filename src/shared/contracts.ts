@@ -307,22 +307,22 @@ export const fetchRunSchema = z.object({
   state: fetchRunStateSchema,
   concurrency: z.number().int().min(1).max(8),
   refreshPaperId: z.string().nullable(),
-  refreshPaperIds: z.array(z.string()).min(1).max(50).nullable().default(null),
+  refreshPaperIds: z.array(z.string()).min(1).nullable().default(null),
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
   manifestPath: z.string(),
-  executionIndexes: z.array(z.number().int().positive()).max(50),
-  items: z.array(fetchItemSchema).max(50)
+  executionIndexes: z.array(z.number().int().positive()),
+  items: z.array(fetchItemSchema)
 })
 export type FetchRun = z.infer<typeof fetchRunSchema>
 
 export const createFetchRunRequestSchema = z.object({
   projectId: z.string(),
-  inputs: z.array(z.string().trim().min(1).max(4_000)).min(1).max(50),
+  inputs: z.array(z.string().trim().min(1).max(4_000)).min(1),
   concurrency: z.number().int().min(1).max(8).default(4),
   refreshPaperId: z.string().optional(),
-  refreshPaperIds: z.array(z.string()).min(1).max(50).optional()
+  refreshPaperIds: z.array(z.string()).min(1).optional()
 }).superRefine((request, context) => {
   if (request.refreshPaperId && request.refreshPaperIds) {
     context.addIssue({
@@ -393,7 +393,7 @@ export type FeedItem = z.infer<typeof feedItemSchema>
 export const feedItemsRequestSchema = z.object({
   subscriptionId: z.string().regex(/^feed_[a-f0-9]{24}$/).nullable().default(null),
   days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(14), z.literal(30)]).default(7),
-  limit: z.number().int().min(1).max(100).default(50),
+  limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().nonnegative().default(0)
 })
 export type FeedItemsRequest = z.input<typeof feedItemsRequestSchema>
