@@ -231,11 +231,15 @@ export const fetchItemStageSchema = z.enum([
   'queued',
   'identity',
   'fetching',
+  'assets',
+  'validating',
+  'writing',
   'acceptance',
   'terminal'
 ])
 
 export const fetchItemStateSchema = z.enum([
+  'cancelling',
   'pending',
   'running',
   'complete',
@@ -253,10 +257,22 @@ export const identityCandidateSchema = z.object({
 })
 export type IdentityCandidate = z.infer<typeof identityCandidateSchema>
 
+export const fetchAssetProgressSchema = z.object({
+  scope: z.string().max(2_000),
+  counts: z.array(z.object({
+    kind: z.enum(['figure', 'formula', 'table', 'supplementary']),
+    completed: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative().nullable(),
+    failed: z.number().int().nonnegative()
+  }).refine((count) => count.failed <= count.completed && (count.total === null || count.completed <= count.total))).max(4)
+})
+
 export const fetchItemSchema = z.object({
   index: z.number().int().positive(),
   query: z.string(),
   stage: fetchItemStageSchema,
+  stageStartedAt: z.string().datetime().nullable().default(null),
+  assetProgress: fetchAssetProgressSchema.nullable().default(null),
   state: fetchItemStateSchema,
   attempt: z.number().int().positive(),
   canonicalDoi: z.string().nullable(),
@@ -505,6 +521,7 @@ export interface LitRootBridge {
     get(projectId: string, runId: string): Promise<FetchRun>
     list(projectId: string): Promise<FetchRun[]>
     cancel(projectId: string, runId: string): Promise<FetchRun>
+    cancelItem(projectId: string, runId: string, index: number): Promise<FetchRun>
     resume(projectId: string, runId: string): Promise<FetchRun>
   }
   feeds: {
@@ -564,6 +581,7 @@ export const IPC = {
   fetchGet: 'litroot:fetch:get',
   fetchList: 'litroot:fetch:list',
   fetchCancel: 'litroot:fetch:cancel',
+  fetchCancelItem: 'litroot:fetch:cancel-item',
   fetchResume: 'litroot:fetch:resume',
   feedsList: 'litroot:feeds:list',
   feedsSearchJournals: 'litroot:feeds:search-journals',

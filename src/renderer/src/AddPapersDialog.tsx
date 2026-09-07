@@ -19,7 +19,8 @@ interface AddPapersDialogProps {
 }
 
 const stateLabel: Record<FetchRun['items'][number]['state'], string> = {
-  pending: '等待',
+  pending: '排队',
+  cancelling: '取消中',
   running: '进行中',
   complete: '完整',
   degraded: '降级',
@@ -28,6 +29,12 @@ const stateLabel: Record<FetchRun['items'][number]['state'], string> = {
   action_required: '需要操作',
   cancelled: '已取消'
 }
+
+const stageLabel: Record<FetchRun['items'][number]['stage'], string> = {
+  queued: '排队', identity: '身份解析', fetching: '正文获取', assets: '资产处理',
+  validating: '抓取验收', writing: '输出写入', acceptance: '验收归档', terminal: '已结束'
+}
+const assetLabel = { figure: '正文图', formula: '公式', table: '表格图', supplementary: '补充材料' }
 
 export function AddPapersDialog({
   open,
@@ -45,6 +52,7 @@ export function AddPapersDialog({
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const createRequest = useRef(0)
+  const [tick, setTick] = useState(Date.now())
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
@@ -79,6 +87,12 @@ export function AddPapersDialog({
     setSelectedRunId((current) => current ?? event.run.id)
   }, [event, open, project.id])
 
+  useEffect(() => {
+    if (!open || !selectedRun || !['queued', 'running', 'cancelling'].includes(selectedRun.state)) return
+    const timer = setInterval(() => setTick(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [open, selectedRun?.state])
+
   if (!open) return null
 
   const create = async (overrideInput?: string): Promise<void> => {
@@ -111,6 +125,16 @@ export function AddPapersDialog({
   const updateRun = (next: FetchRun): void => {
     setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
     setSelectedRunId(next.id)
+  }
+
+  const cancelItem = async (run: FetchRun, index: number): Promise<void> => {
+    updateRun({ ...run, items: run.items.map((item) => item.index === index ? { ...item, state: 'cancelling' } : item) })
+    try {
+      updateRun(await bridge().fetch.cancelItem(project.id, run.id, index))
+    } catch (error) {
+      setMessage(errorMessage(error))
+      void bridge().fetch.get(project.id, run.id).then(updateRun).catch(() => undefined)
+    }
   }
 
   return (
@@ -170,13 +194,19 @@ export function AddPapersDialog({
                   <div><span className={`run-state ${selectedRun.state}`}>{selectedRun.state}</span><small>{selectedRun.id}</small></div>
                   <div className="button-row">
                     {['queued', 'running', 'cancelling'].includes(selectedRun.state) && (
-                      <button type="button" onClick={() => void bridge().fetch.cancel(project.id, selectedRun.id).then(updateRun)}>取消</button>
+                      <button type="button" disabled={selectedRun.state === 'cancelling'} onClick={() => void bridge().fetch.cancel(project.id, selectedRun.id).then(updateRun).catch((error) => setMessage(errorMessage(error)))}>取消整批</button>
                     )}
                     {['interrupted', 'cancelled', 'completed'].includes(selectedRun.state) && selectedRun.items.some((item) => ['failed', 'cancelled', 'action_required'].includes(item.state)) && (
                       <button type="button" onClick={() => void bridge().fetch.resume(project.id, selectedRun.id).then(updateRun)}>从 manifest 恢复</button>
                     )}
                   </div>
                 </div>
+                <p className="fetch-summary" aria-live="polite">
+                  已结束 {selectedRun.items.filter((item) => item.stage === 'terminal').length}/{selectedRun.items.length}
+                  {(['complete', 'degraded', 'failed', 'limited', 'action_required', 'cancelled'] as const).map((state) => (
+                    <span key={state}> · {state === 'complete' ? '成功' : stateLabel[state]} {selectedRun.items.filter((item) => item.state === state).length}</span>
+                  ))}
+                </p>
                 <ol className="fetch-items">
                   {selectedRun.items.map((item) => (
                     <li key={item.index} className={`fetch-item ${item.state}`}>
@@ -188,7 +218,13 @@ export function AddPapersDialog({
                         <span className="item-state">{stateLabel[item.state]}</span>
                       </div>
                       <div className="fetch-meta">
-                        <span>{item.stage}</span>
+                        <span>{stageLabel[item.stage]}</span>
+                        {item.stage !== 'terminal' && item.stageStartedAt && (
+                          <span>{Math.max(0, Math.floor((tick - Date.parse(item.stageStartedAt)) / 1_000))} 秒</span>
+                        )}
+                        {item.assetProgress?.counts.map((count) => (
+                          <span key={count.kind}>{assetLabel[count.kind]} 已处理 {count.completed}/{count.total ?? '未知'}{count.failed > 0 ? `，失败 ${count.failed}` : ''}</span>
+                        ))}
                         {item.provider && <span>{item.provider}</span>}
                         {item.contentKind && <span>{item.contentKind}</span>}
                         <span>尝试 {item.attempt}</span>
@@ -197,6 +233,11 @@ export function AddPapersDialog({
                       {item.outputSha256 && <p className="fetch-artifact"><strong>SHA-256：</strong><code>{item.outputSha256}</code></p>}
                       {item.reason && <p>{item.reason}</p>}
                       <div className="button-row">
+                        {['queued', 'running', 'cancelling'].includes(selectedRun.state) && !['terminal', 'acceptance'].includes(item.stage) && (
+                          <button type="button" disabled={item.state === 'cancelling'} onClick={() => void cancelItem(selectedRun, item.index)}>
+                            {item.state === 'cancelling' ? '取消中' : '取消此篇'}
+                          </button>
+                        )}
                         {item.existingPaperId && (
                           <button type="button" onClick={() => onOpenPaper(item.existingPaperId ?? '')}>打开现有条目</button>
                         )}

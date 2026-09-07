@@ -5,13 +5,12 @@ import {
   opendir,
   readFile
 } from 'node:fs/promises'
-import chokidar, { type FSWatcher } from 'chokidar'
+import { z } from 'zod'
 import type {
   CreateFetchRunRequest,
-  FetchItem,
   FetchRun
 } from '../shared/contracts.js'
-import { createFetchRunRequestSchema, fetchRunSchema } from '../shared/contracts.js'
+import { createFetchRunRequestSchema, fetchRunSchema, fetchAssetProgressSchema } from '../shared/contracts.js'
 import type { ProjectLayout } from './project-layout.js'
 import type { ProjectDatabase } from './project-database.js'
 import type { ProjectScanner } from './scanner.js'
@@ -25,10 +24,24 @@ import {
   parseJsonLines,
   parseManifestDocument,
   parseTerminalRecord,
-  projectRecord,
   type ParsedTerminalRecord
 } from './fetch-record.js'
+import { requirePaperFetchProgress } from './diagnostics.js'
 import { FetchAcceptance } from './fetch-acceptance.js'
+
+const progressBase = z.object({
+  paper_fetch_progress: z.literal(true),
+  protocol_version: z.literal(1),
+  run_id: z.string().min(1).max(100),
+  index: z.number().int().min(0).max(50)
+})
+const progressEventSchema = z.discriminatedUnion('type', [
+  progressBase.extend({ type: z.literal('run_started'), index: z.literal(0), total: z.number().int().min(1).max(50) }),
+  progressBase.extend({ type: z.literal('stage'), stage: z.enum(['queued', 'identity', 'fetching', 'assets', 'validating', 'writing']) }),
+  progressBase.extend({ type: z.literal('assets'), ...fetchAssetProgressSchema.shape }),
+  progressBase.extend({ type: z.literal('terminal'), record: z.object({ index: z.number().int().positive(), run_id: z.string().min(1) }).passthrough() }),
+  progressBase.extend({ type: z.literal('cancel_response'), status: z.enum(['cancelling', 'already_finished', 'invalid_command', 'stale_run']) })
+])
 
 interface RunFiles {
   appManifest: string
@@ -56,7 +69,7 @@ function copyRun(run: FetchRun): FetchRun {
 export class PaperFetchRunner {
   private readonly processes = new Map<string, ChildProcess>()
   private readonly runs = new Map<string, FetchRun>()
-  private readonly watchers = new Map<string, FSWatcher>()
+  private readonly engineRunIds = new Map<string, string>()
   private readonly tasks = new Map<string, Promise<void>>()
   private readonly executable: string
   private readonly prefixArgs: string[]
@@ -119,6 +132,7 @@ export class PaperFetchRunner {
 
   async create(request: CreateFetchRunRequest): Promise<FetchRun> {
     const normalizedRequest = createFetchRunRequestSchema.parse(request)
+    await requirePaperFetchProgress({ executable: this.executable, prefixArgs: this.prefixArgs })
     const runId = `run_${sha256(`${now()}\0${Math.random()}`).slice(0, 24)}`
     const files = this.files(runId)
     const inputs = normalizedRequest.inputs.map((input) => input.trim())
@@ -155,10 +169,33 @@ export class PaperFetchRunner {
     const run = this.requireMutable(runId)
     if (!['queued', 'running'].includes(run.state)) return copyRun(run)
     run.state = 'cancelling'
+    for (const item of run.items) {
+      if (item.stage !== 'terminal' && item.stage !== 'acceptance') item.state = 'cancelling'
+    }
+    this.sendCancel(run, null)
     await this.persist(run)
-    const child = this.processes.get(runId)
-    if (child) this.terminateProcess(runId, child)
     return copyRun(run)
+  }
+
+  async cancelItem(runId: string, index: number): Promise<FetchRun> {
+    const run = this.requireMutable(runId)
+    const item = Number.isInteger(index) && index > 0 ? run.items[index - 1] : undefined
+    if (!item) throw new LitRootError('item_not_found', '抓取条目不存在。', 404)
+    if (!['queued', 'running', 'cancelling'].includes(run.state) ||
+      item.stage === 'terminal' || item.stage === 'acceptance' || item.state === 'cancelling') return copyRun(run)
+    item.state = 'cancelling'
+    this.sendCancel(run, index)
+    await this.persist(run)
+    return copyRun(run)
+  }
+
+  private sendCancel(run: FetchRun, index: number | null): void {
+    const engineRunId = this.engineRunIds.get(run.id)
+    const child = this.processes.get(run.id)
+    if (!engineRunId || !child?.stdin?.writable) return
+    const engineIndex = index === null ? null : run.executionIndexes.indexOf(index) + 1
+    if (engineIndex === 0) return
+    child.stdin.write(`${JSON.stringify({ protocol_version: 1, run_id: engineRunId, command: 'cancel', index: engineIndex })}\n`)
   }
 
   async resume(runId: string): Promise<FetchRun> {
@@ -167,9 +204,12 @@ export class PaperFetchRunner {
     if (!['interrupted', 'cancelled', 'completed'].includes(run.state)) {
       throw new LitRootError('run_not_resumable', '该任务当前不能恢复。', 409)
     }
+    await requirePaperFetchProgress({ executable: this.executable, prefixArgs: this.prefixArgs })
     for (const item of run.items) {
       if (['complete', 'degraded', 'limited'].includes(item.state)) continue
       item.stage = 'queued'
+      item.stageStartedAt = now()
+      item.assetProgress = null
       item.state = 'pending'
       item.attempt += 1
       item.reason = null
@@ -191,8 +231,6 @@ export class PaperFetchRunner {
     }
     for (const [runId, child] of this.processes) this.terminateProcess(runId, child)
     await Promise.all([...this.tasks.values()].map((task) => task.catch(() => undefined)))
-    await Promise.all([...this.watchers.values()].map((watcher) => watcher.close().catch(() => undefined)))
-    this.watchers.clear()
     await Promise.all([...this.runs.values()].map((run) => this.persist(run)))
   }
 
@@ -212,10 +250,9 @@ export class PaperFetchRunner {
   }
 
   private activeIndexes(run: FetchRun): number[] {
-    const canonicalIndexes = new Map<string, number>()
     const active: number[] = []
     for (const item of run.items) {
-      if (item.state !== 'pending') continue
+      if (!['pending', 'cancelling'].includes(item.state)) continue
       const refreshPaperId = run.refreshPaperIds?.[item.index - 1] ?? run.refreshPaperId ?? undefined
       const normalized = doiFromInput(item.query)
       if (normalized) {
@@ -229,17 +266,10 @@ export class PaperFetchRunner {
           item.reason = '当前项目中已存在该 DOI，未创建副本。'
           continue
         }
-        const primary = canonicalIndexes.get(normalized)
-        if (primary !== undefined) {
-          item.stage = 'identity'
-          item.state = 'running'
-          item.reason = `与第 ${primary} 条输入合并。`
-          continue
-        }
-        canonicalIndexes.set(normalized, item.index)
       }
-      item.stage = 'identity'
-      item.state = 'running'
+      item.stage = 'queued'
+      item.stageStartedAt = now()
+      if (item.state !== 'cancelling') item.state = 'running'
       active.push(item.index)
     }
     return active
@@ -247,11 +277,9 @@ export class PaperFetchRunner {
 
   private async execute(run: FetchRun, resume: boolean): Promise<void> {
     const files = this.files(run.id)
-    const activeIndexes = resume && run.executionIndexes.length > 0
-      ? [...run.executionIndexes]
-      : this.activeIndexes(run)
-    if (!resume) run.executionIndexes = [...activeIndexes]
-    run.state = 'running'
+    const activeIndexes = this.activeIndexes(run)
+    run.executionIndexes = [...activeIndexes]
+    if (run.state !== 'cancelling') run.state = 'running'
     run.startedAt = now()
     await this.persist(run)
     if (activeIndexes.length === 0) {
@@ -260,7 +288,6 @@ export class PaperFetchRunner {
       return
     }
 
-    if (resume && activeIndexes.length > 1) await this.audit(files.paperFetchManifest)
     const activeQueries = activeIndexes.map((index) => run.items[index - 1]?.query ?? '')
     await atomicWriteFile(files.queryFile, `${activeQueries.join('\n')}\n`)
 
@@ -268,20 +295,18 @@ export class PaperFetchRunner {
     const args = batch
       ? this.batchArguments(run, files, resume)
       : this.singleArguments(run, files, activeIndexes[0] ?? 1, resume)
-    if (batch) await this.watchBatchResults(run, files, activeIndexes)
+    if (resume) await atomicWriteFile(batch ? files.batchResults : files.paperFetchManifest, '')
     const result = await this.spawnProcess(run, args)
-    await this.stopResultWatcher(run.id)
 
     if (batch) {
-      await this.applyBatchRecords(run, files, activeIndexes)
-    } else {
+      await this.applyBatchRecords(run, files, activeIndexes, result)
+    } else if (run.items[(activeIndexes[0] ?? 1) - 1]?.stage !== 'terminal') {
       const values = [
         ...parseJsonLines(result.stdout),
-        ...parseJsonLines(result.stderr),
         ...await this.readManifestValues(files.paperFetchManifest)
       ]
       const record = values.map((value) => parseTerminalRecord(value, 1)).findLast(Boolean)
-      await this.acceptance.accept(
+      await this.acceptRecord(
         run,
         activeIndexes[0] ?? 1,
         record ?? parseTerminalRecord({
@@ -296,11 +321,10 @@ export class PaperFetchRunner {
       )
     }
 
-    this.resolveMergedInputs(run)
     await this.scanner.scan()
     if ((run.state as string) === 'interrupted') {
       for (const item of run.items) {
-        if (['pending', 'running'].includes(item.state)) {
+        if (['pending', 'running', 'cancelling'].includes(item.state)) {
           item.stage = 'terminal'
           item.state = 'cancelled'
           item.reason = '服务已停止；可从 manifest 恢复。'
@@ -309,7 +333,7 @@ export class PaperFetchRunner {
       run.state = 'interrupted'
     } else if ((run.state as string) === 'cancelling' || result.signal) {
       for (const item of run.items) {
-        if (['pending', 'running'].includes(item.state)) {
+        if (['pending', 'running', 'cancelling'].includes(item.state)) {
           item.stage = 'terminal'
           item.state = 'cancelled'
           item.reason = '任务已取消；可从 manifest 恢复。'
@@ -325,13 +349,13 @@ export class PaperFetchRunner {
 
   private batchArguments(run: FetchRun, files: RunFiles, resume: boolean): string[] {
     const args = [
-      'fetch', '--query-file', files.queryFile,
+      'fetch', '--progress', 'jsonl', '--control-stdin', '--query-file', files.queryFile,
       '--format', 'markdown',
       '--output-dir', files.temporaryDirectory,
-      '--batch-concurrency', String(run.concurrency)
+      '--batch-concurrency', String(run.concurrency),
+      '--batch-results', files.batchResults
     ]
-    if (resume) args.push('--resume', files.paperFetchManifest)
-    else args.push('--batch-results', files.batchResults, '--run-manifest', files.paperFetchManifest)
+    if (resume) args.push('--overwrite')
     return [
       ...args,
       '--artifact-mode', 'markdown-assets',
@@ -349,7 +373,7 @@ export class PaperFetchRunner {
   ): string[] {
     const item = run.items[originalIndex - 1]
     const args = [
-      'fetch', '--query', item?.query ?? '',
+      'fetch', '--progress', 'jsonl', '--control-stdin', '--query', item?.query ?? '',
       '--format', 'markdown',
       '--output-dir', files.temporaryDirectory,
       '--manifest', files.paperFetchManifest
@@ -364,41 +388,124 @@ export class PaperFetchRunner {
     ]
   }
 
-  private async audit(manifestPath: string): Promise<void> {
-    const result = await this.spawnDetached(['manifest', 'audit', manifestPath])
-    if (result.exitCode !== 0) {
-      throw new LitRootError(
-        'manifest_audit_failed',
-        `paper-fetch manifest audit 未通过：${result.stderr.trim() || result.stdout.trim()}`,
-        409
-      )
-    }
-  }
-
   private spawnProcess(run: FetchRun, args: string[]): Promise<ProcessResult> {
     return new Promise((resolveProcess, reject) => {
       const child = spawn(this.executable, [...this.prefixArgs, ...args], {
         cwd: this.layout.root,
         env: process.env,
         shell: false,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe']
       })
       this.processes.set(run.id, child)
       let stdout = ''
       let stderr = ''
+      let partial = ''
+      let updates = Promise.resolve()
+      let updateError: unknown
+      let progressPending = false
+      const terminals = new Set<number>()
+      const enqueue = (update: () => Promise<void>): void => {
+        updates = updates.then(update).catch((error: unknown) => { updateError ??= error })
+      }
+      const persistProgress = (): void => {
+        if (progressPending) return
+        progressPending = true
+        enqueue(async () => {
+          progressPending = false
+          await this.persist(run)
+        })
+      }
+      const receive = (line: string): void => {
+        let raw: unknown
+        try { raw = JSON.parse(line) } catch { raw = null }
+        const parsed = progressEventSchema.safeParse(raw)
+        if (!parsed.success) {
+          stderr = `${stderr}${line}\n`.slice(-1_000_000)
+          return
+        }
+        const event = parsed.data
+        if (event.type === 'run_started') {
+          if (this.engineRunIds.has(run.id) || event.total !== run.executionIndexes.length) return
+          this.engineRunIds.set(run.id, event.run_id)
+          if (run.state === 'cancelling') this.sendCancel(run, null)
+          else for (const item of run.items) {
+            if (item.state === 'cancelling') this.sendCancel(run, item.index)
+          }
+          return
+        }
+        if (event.run_id !== this.engineRunIds.get(run.id)) return
+        const index = run.executionIndexes[event.index - 1]
+        const item = index ? run.items[index - 1] : undefined
+        if (!index || !item || terminals.has(index) || item.stage === 'terminal') return
+        if (event.type === 'terminal') {
+          const record = parseTerminalRecord(event.record)
+          if (!record || record.index !== event.index || event.record.run_id !== event.run_id) return
+          terminals.add(index)
+          item.stage = 'acceptance'
+          item.stageStartedAt = now()
+          item.state = 'running'
+          enqueue(async () => {
+            await this.persist(run)
+            await this.acceptRecord(run, index, record, this.files(run.id).temporaryDirectory)
+            await this.scanner.scan()
+            await this.persist(run)
+          })
+        } else if (event.type === 'stage') {
+          if (item.stage !== event.stage) {
+            item.stage = event.stage
+            item.stageStartedAt = now()
+            if (event.stage === 'identity' || event.stage === 'fetching') item.assetProgress = null
+          }
+          persistProgress()
+        } else if (event.type === 'assets') {
+          item.assetProgress = { scope: event.scope, counts: event.counts }
+          persistProgress()
+        } else if (event.type === 'cancel_response' && event.status === 'cancelling') {
+          item.state = 'cancelling'
+          persistProgress()
+        }
+      }
+      child.stdin.on('error', () => { /* Exit reconciliation reports a closed control channel. */ })
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
       child.stdout.on('data', (chunk: string) => { stdout = `${stdout}${chunk}`.slice(-1_000_000) })
-      child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-1_000_000) })
+      child.stderr.on('data', (chunk: string) => {
+        partial += chunk
+        let end: number
+        while ((end = partial.indexOf('\n')) !== -1) {
+          const line = partial.slice(0, end)
+          partial = partial.slice(end + 1)
+          receive(line)
+        }
+        if (partial.length > 1_000_000) {
+          stderr = partial.slice(-1_000_000)
+          partial = ''
+        }
+      })
       child.once('error', reject)
       child.once('close', (exitCode, signal) => {
+        if (partial) receive(partial)
         if (this.processes.get(run.id) === child) this.processes.delete(run.id)
-        resolveProcess({ exitCode, signal, stdout, stderr })
+        this.engineRunIds.delete(run.id)
+        void updates.then(() => {
+          if (updateError) reject(updateError)
+          else resolveProcess({ exitCode, signal, stdout, stderr })
+        })
       })
-      if (run.state === 'cancelling' || run.state === 'interrupted') {
-        this.terminateProcess(run.id, child)
-      }
+      if (run.state === 'interrupted') this.terminateProcess(run.id, child)
     })
+  }
+
+  private async acceptRecord(run: FetchRun, index: number, record: ParsedTerminalRecord, stagingRoot: string): Promise<void> {
+    const item = run.items[index - 1]
+    if (!item || item.stage === 'terminal') return
+    item.stage = 'acceptance'
+    item.stageStartedAt = now()
+    // Acceptance mutates its item before I/O; publish it only once archival finishes.
+    const accepted = copyRun(run)
+    await this.acceptance.accept(accepted, index, record, stagingRoot)
+    Object.assign(item, accepted.items[index - 1])
+    item.stageStartedAt = now()
   }
 
   private terminateProcess(runId: string, child: ChildProcess): void {
@@ -408,29 +515,6 @@ export class PaperFetchRunner {
     }, 2_000)
     timer.unref()
     child.once('close', () => clearTimeout(timer))
-  }
-
-  private spawnDetached(args: string[]): Promise<ProcessResult> {
-    const diagnosticRun = { id: `audit_${Date.now()}` } as FetchRun
-    return this.spawnProcess(diagnosticRun, args)
-  }
-
-  private async watchBatchResults(run: FetchRun, files: RunFiles, indexes: number[]): Promise<void> {
-    const watcher = chokidar.watch(files.batchResults, {
-      ignoreInitial: false,
-      awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 }
-    })
-    const update = (): void => {
-      void this.previewBatchRecords(run, files, indexes).catch(() => undefined)
-    }
-    watcher.on('add', update).on('change', update)
-    this.watchers.set(run.id, watcher)
-  }
-
-  private async stopResultWatcher(runId: string): Promise<void> {
-    const watcher = this.watchers.get(runId)
-    this.watchers.delete(runId)
-    await watcher?.close()
   }
 
   private async recordsFromJsonl(path: string): Promise<ParsedTerminalRecord[]> {
@@ -449,54 +533,32 @@ export class PaperFetchRunner {
     }
   }
 
-  private async previewBatchRecords(run: FetchRun, files: RunFiles, indexes: number[]): Promise<void> {
-    for (const record of await this.recordsFromJsonl(files.batchResults)) {
-      const original = indexes[record.index - 1]
-      if (!original) continue
-      const item = run.items[original - 1]
-      if (!item || item.stage === 'terminal') continue
-      projectRecord(item, record)
-      item.stage = 'acceptance'
-      item.state = 'running'
-    }
-    await this.persist(run)
-  }
-
-  private async applyBatchRecords(run: FetchRun, files: RunFiles, indexes: number[]): Promise<void> {
+  private async applyBatchRecords(
+    run: FetchRun,
+    files: RunFiles,
+    indexes: number[],
+    result: ProcessResult
+  ): Promise<void> {
     const records = await this.recordsFromJsonl(files.batchResults)
     const byIndex = new Map(records.map((record) => [record.index, record]))
     for (const [position, originalIndex] of indexes.entries()) {
+      if (run.items[originalIndex - 1]?.stage === 'terminal') continue
       const record = byIndex.get(position + 1) ?? parseTerminalRecord({
         index: position + 1,
-        status: run.state === 'cancelling' ? 'cancelled' : 'error',
-        reason: 'paper-fetch 没有为该输入写入 terminal JSONL record。'
+        status: ['cancelling', 'interrupted'].includes(run.state) || result.signal ? 'cancelled' : 'error',
+        reason: [
+          'paper-fetch 没有为该输入写入 terminal JSONL record。',
+          result.signal ? `paper-fetch terminated by ${result.signal}` : `paper-fetch exited with code ${result.exitCode}`,
+          result.stderr.trim() || result.stdout.trim()
+        ].filter(Boolean).join('\n')
       }) as ParsedTerminalRecord
-      await this.acceptance.accept(run, originalIndex, record, files.temporaryDirectory)
-    }
-  }
-
-  private resolveMergedInputs(run: FetchRun): void {
-    const primaryByDoi = new Map<string, FetchItem>()
-    for (const item of run.items) {
-      const doi = item.canonicalDoi ?? doiFromInput(item.query)
-      if (!doi) continue
-      const primary = primaryByDoi.get(doi)
-      if (!primary && item.stage === 'terminal') {
-        primaryByDoi.set(doi, item)
-        continue
-      }
-      if (primary && item.stage !== 'terminal') {
-        const query = item.query
-        const index = item.index
-        Object.assign(item, structuredClone(primary), { query, index })
-        item.reason = `与第 ${primary.index} 条输入合并；${primary.reason ?? '共享同一验收结果。'}`
-      }
+      await this.acceptRecord(run, originalIndex, record, files.temporaryDirectory)
     }
   }
 
   private finishRun(run: FetchRun): void {
     for (const item of run.items) {
-      if (item.state === 'pending' || item.state === 'running') {
+      if (['pending', 'running', 'cancelling'].includes(item.state)) {
         item.stage = 'terminal'
         item.state = 'failed'
         item.acceptance = 'failed'
@@ -516,10 +578,9 @@ export class PaperFetchRunner {
   }
 
   private async failRun(run: FetchRun, error: unknown): Promise<void> {
-    await this.stopResultWatcher(run.id)
     const stopping = run.state === 'cancelling' || run.state === 'interrupted'
     for (const item of run.items) {
-      if (['pending', 'running'].includes(item.state)) {
+      if (['pending', 'running', 'cancelling'].includes(item.state)) {
         item.stage = 'terminal'
         item.state = stopping ? 'cancelled' : 'failed'
         item.acceptance = stopping ? null : 'failed'

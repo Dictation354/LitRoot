@@ -41,6 +41,7 @@ const bridge: LitRootTransportBridge = {
     get: (projectId, runId) => ipcRenderer.invoke(IPC.fetchGet, projectId, runId),
     list: (projectId) => ipcRenderer.invoke(IPC.fetchList, projectId),
     cancel: (projectId, runId) => ipcRenderer.invoke(IPC.fetchCancel, projectId, runId),
+    cancelItem: (projectId, runId, index) => ipcRenderer.invoke(IPC.fetchCancelItem, projectId, runId, index),
     resume: (projectId, runId) => ipcRenderer.invoke(IPC.fetchResume, projectId, runId)
   },
   feeds: {

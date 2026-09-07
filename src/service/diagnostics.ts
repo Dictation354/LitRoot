@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import type { DependencyReport } from '../shared/contracts.js'
 import { dependencyRepair } from '../shared/dependency-repair.js'
+import { LitRootError } from './errors.js'
 import { supportedNode } from '../shared/node-version.js'
-import { paperFetchCommandFromEnvironment } from './paper-fetch-command.js'
+import { paperFetchCommandFromEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
 
 interface CommandResult {
   ok: boolean
@@ -17,8 +18,8 @@ function command(executable: string, args: string[]): Promise<CommandResult> {
     let error = ''
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => { output = `${output}${chunk}`.slice(-8_000) })
-    child.stderr.on('data', (chunk: string) => { error = `${error}${chunk}`.slice(-8_000) })
+    child.stdout.on('data', (chunk: string) => { output = `${output}${chunk}`.slice(-40_000) })
+    child.stderr.on('data', (chunk: string) => { error = `${error}${chunk}`.slice(-40_000) })
     const timer = setTimeout(() => child.kill('SIGKILL'), 5_000)
     timer.unref()
     child.once('error', (spawnError) => {
@@ -36,6 +37,15 @@ function command(executable: string, args: string[]): Promise<CommandResult> {
   })
 }
 
+export async function requirePaperFetchProgress(paperFetch: PaperFetchCommand): Promise<void> {
+  const result = await command(paperFetch.executable, [...paperFetch.prefixArgs, 'fetch', '--help'])
+  if (!result.ok || !/--progress\b/.test(result.output) || !/--control-stdin\b/.test(result.output)) {
+    throw new LitRootError('paper_fetch_upgrade_required',
+      '请升级 paper-fetch：LitRoot 要求支持 --progress jsonl 和 --control-stdin 的版本。' +
+      (result.reason ? ` ${result.reason}` : ''), 409)
+  }
+}
+
 export async function diagnoseEnvironment(
   runtimeLabel = process.env.LITROOT_RUNTIME_LABEL || '本机'
 ): Promise<DependencyReport> {
@@ -44,6 +54,7 @@ export async function diagnoseEnvironment(
     paperFetch.executable,
     [...paperFetch.prefixArgs, '--version']
   )
+  const protocolReason = await requirePaperFetchProgress(paperFetch).then(() => null, (error: Error) => error.message)
   const nodeVersion = process.version
   const checks: DependencyReport['checks'] = [
     {
@@ -56,11 +67,11 @@ export async function diagnoseEnvironment(
     },
     {
       name: 'paper-fetch',
-      ok: paperFetchResult.ok,
+      ok: paperFetchResult.ok && protocolReason === null,
       version: paperFetchResult.ok ? paperFetchResult.output.split(/\r?\n/, 1)[0] ?? null : null,
       required: '可执行的官方 paper-fetch',
       repairCommand: dependencyRepair.paperFetch,
-      reason: paperFetchResult.reason
+      reason: paperFetchResult.reason ?? protocolReason
     }
   ]
   return { runtimeLabel, ready: checks.every((check) => check.ok), checks }

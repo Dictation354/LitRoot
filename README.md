@@ -51,18 +51,22 @@ Electron 仅负责窗口、运行环境选择、安全 IPC 和受限图片协议
 
 ## 抓取与验收
 
-LitRoot 不复制抓取逻辑。单篇使用 `paper-fetch fetch --query`，批量使用 UTF-8 query file、JSONL 和 run manifest，固定参数为：
+LitRoot 不复制抓取逻辑。单篇使用 `paper-fetch fetch --query`，批量使用 UTF-8 query file 和最终 JSONL 结果；单篇保留独立 manifest。两者都通过 stderr JSONL 事件显示实时进度，通过 stdin 请求协作式取消，固定参数为：
 
 ```text
+--progress jsonl
+--control-stdin
 --artifact-mode markdown-assets
 --asset-profile body
 --include-refs all
 --max-tokens full_text
 ```
 
-任务逐项展示身份、候选、provider、尝试次数、抓取阶段和 `complete / degraded / limited / failed / action_required`。顶层 `status=ok` 不等于全文完成；摘要和 metadata 结果最多为 `limited`。
+单篇、批量及两种刷新入口都逐项展示中文阶段、阶段耗时、当前轮次的正文图/公式/表格图计数与取消按钮。取消请求先显示“取消中”，执行端确认后显示“已取消”，其余论文继续；进入“验收归档”的结果会完成归档事务。汇总按“已结束 X/N”分别统计成功、降级、失败、受限、需要操作和取消。顶层 `status=ok` 不等于全文完成；摘要和 metadata 结果最多为 `limited`。
 
-所有新结果先写入 `.litroot/tmp/`。LitRoot 复核身份、可信 frontmatter、内容级别、资产边界、实际路径和 SHA-256 后再归档。刷新结果不是全文或资产验收失败时，旧正文保持不变；笔记和元数据覆盖永远不会被刷新替换。
+LitRoot 要求 paper-fetch 声明 `--progress` 和 `--control-stdin`，依赖诊断及创建/恢复时都会检查；旧版会收到明确升级提示。
+
+所有新结果先写入 `.litroot/tmp/`。每篇完成后立即独立验收、归档并更新文献列表，无需等待整批结束。取消项的部分产物留在暂存区，不入库；取消刷新保留旧全文，可显式“从 manifest 恢复”重新执行取消项。LitRoot 复核身份、可信 frontmatter、内容级别、资产边界、实际路径和 SHA-256 后再归档。刷新结果不是全文或资产验收失败时，旧正文保持不变；笔记和元数据覆盖永远不会被刷新替换。
 
 ## 安全边界
 

@@ -267,6 +267,10 @@ export class AppController {
     return this.clientFor(projectId).then((client) => client.getFetch(projectId, runId))
   }
 
+  cancelFetchItem(projectId: string, runId: string, index: number) {
+    return this.clientFor(projectId).then((client) => client.cancelFetchItem(projectId, runId, index))
+  }
+
   cancelFetch(projectId: string, runId: string) {
     return this.clientFor(projectId).then((client) => client.cancelFetch(projectId, runId))
   }

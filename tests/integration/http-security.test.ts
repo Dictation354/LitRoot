@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LitRootHttpServer } from '../../src/service/http-server.js'
 import { ProjectRegistry } from '../../src/service/project-registry.js'
-import { createFakePaperFetch, paperMarkdown, writePaper } from '../helpers.js'
+import { LitRootServiceClient } from '../../src/main/service-client.js'
+import { createFakePaperFetch, paperMarkdown, writePaper, waitFor } from '../helpers.js'
 
 const sandboxes: string[] = []
 
@@ -46,6 +47,15 @@ describe('localhost service security', () => {
       headers: { Authorization: `Bearer ${token}`, Origin: 'https://evil.test' }
     })
     expect(browserOrigin.status).toBe(403)
+    const client = new LitRootServiceClient(`http://127.0.0.1:${port}`, token)
+    const run = await client.createFetch({ projectId: project.id, inputs: ['slow HTTP cancel', '10.5555/other'] })
+    const endpoint = `${base}/projects/${project.id}/fetch/${run.id}/items/1/cancel`
+    expect((await fetch(endpoint, { method: 'POST' })).status).toBe(401)
+    await expect(client.cancelFetchItem(project.id, run.id, 0)).rejects.toMatchObject({ status: 400 })
+    await expect(client.cancelFetchItem(project.id, run.id, 3)).rejects.toMatchObject({ status: 404 })
+    expect((await client.cancelFetchItem(project.id, run.id, 1)).items[0]?.state).toBe('cancelling')
+    await waitFor(() => registry.require(project.id).fetch.get(run.id).state === 'completed')
+    expect((await client.getFetch(project.id, run.id)).items.map((item) => item.state)).toEqual(['cancelled', 'complete'])
     await server.close()
     await registry.close()
   })

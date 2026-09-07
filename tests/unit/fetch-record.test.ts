@@ -8,6 +8,35 @@ import {
 } from '../../src/service/fetch-record.js'
 
 describe('paper-fetch record parsing', () => {
+  it('reads current schema-v2 terminal records and nested failure statuses', () => {
+    const record = parseTerminalRecord({
+      schema_version: 2,
+      index: 2,
+      record_status: 'completed',
+      error: null,
+      source: 'publisher',
+      acceptance: {
+        overall: 'complete',
+        identity: { doi: '10.4242/current', title: 'Current paper', canonical_landing_url: 'https://example.test/current' },
+        content: { status: 'fulltext', has_fulltext: true }
+      },
+      output_artifacts: [{ kind: 'primary_markdown', path: '/tmp/current.md', sha256: 'ABC123' }]
+    })
+    expect(record).toMatchObject({
+      index: 2, status: 'ok', canonicalDoi: '10.4242/current', title: 'Current paper',
+      canonicalUrl: 'https://example.test/current', provider: 'publisher',
+      contentKind: 'fulltext', outputPath: '/tmp/current.md', outputSha256: 'ABC123'
+    })
+    const failure = parseTerminalRecord({
+      record_status: 'failed', error: { status: 'no_access', reason: 'Authentication required' }
+    })!
+    expect(failure.status).toBe('no_access')
+    expect(actionRequired(failure)).toBe(true)
+    expect(parseTerminalRecord({
+      record_status: 'aborted', error: { status: 'aborted', code: 'request_cancelled' }
+    })?.status).toBe('cancelled')
+  })
+
   it('reads compatible nested identity, output artifact, error, and acceptance fields', () => {
     const record = parseTerminalRecord({
       index: 2,

@@ -184,6 +184,8 @@ export function registerIpc(
     controller.getFetch(identifier.parse(projectId), identifier.parse(runId))))
   ipcMain.handle(IPC.fetchCancel, trusted((_event, projectId, runId) =>
     controller.cancelFetch(identifier.parse(projectId), identifier.parse(runId))))
+  ipcMain.handle(IPC.fetchCancelItem, trusted((_event, projectId, runId, index) =>
+    controller.cancelFetchItem(identifier.parse(projectId), identifier.parse(runId), z.number().int().min(1).max(50).parse(index))))
   ipcMain.handle(IPC.fetchResume, trusted((_event, projectId, runId) =>
     controller.resumeFetch(identifier.parse(projectId), identifier.parse(runId))))
 

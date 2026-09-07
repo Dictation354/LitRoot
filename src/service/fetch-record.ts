@@ -88,15 +88,19 @@ export function parseTerminalRecord(
     (item) => isRecord(item) && /markdown/i.test(String(item.kind))
   )
   const artifact = isRecord(markdownArtifact) ? markdownArtifact : {}
+  const status = text(value.status) ?? text(errorRecord.status) ?? (
+    value.record_status === 'completed' ? 'ok' : text(value.record_status) ?? 'unknown'
+  )
   return {
     index: integer(value.index, fallbackIndex),
     attempt: integer(value.attempt, 1),
-    status: text(value.status) ?? 'unknown',
+    status: status === 'aborted' ? 'cancelled' : status,
     canonicalDoi: normalizeDoi(
       value.doi ?? value.canonical_doi ?? identityRecord.doi ?? identityRecord.canonical_doi
     ),
     canonicalUrl: text(
-      value.canonical_url ?? value.url ?? identityRecord.url ?? identityRecord.canonical_url
+      value.canonical_url ?? value.url ?? identityRecord.url ?? identityRecord.canonical_url ??
+      identityRecord.canonical_landing_url
     ),
     title: text(value.title ?? identityRecord.title),
     provider: text(value.provider ?? value.source ?? nested(value, 'metadata').provider),
@@ -105,7 +109,7 @@ export function parseTerminalRecord(
     candidates: candidates(value.candidates ?? errorRecord.candidates),
     acceptance: acceptance(acceptanceRecord.overall ?? value.overall),
     contentKind: contentKind(
-      contentRecord.kind ?? contentRecord.content_kind ?? value.content_kind
+      contentRecord.kind ?? contentRecord.content_kind ?? value.content_kind ?? contentRecord.status
     ),
     outputPath: text(
       value.output_path ?? value.saved_markdown_path ?? outputRecord.path ?? artifact.path
@@ -148,6 +152,8 @@ export function itemFor(index: number, query: string): FetchItem {
     index,
     query,
     stage: 'queued',
+    stageStartedAt: new Date().toISOString(),
+    assetProgress: null,
     state: 'pending',
     attempt: 1,
     canonicalDoi: doiFromInput(query),

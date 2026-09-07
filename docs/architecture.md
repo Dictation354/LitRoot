@@ -39,6 +39,10 @@ The application owns only minimal YAML frontmatter. Everything after it is the u
 
 ## Fetch state
 
-Each app run persists an app-facing manifest next to the official paper-fetch run manifest and append-only JSONL. Results are projected by original input index; completion order is separate. Structured acceptance is used when present. Local verification can lower a result but never raise a limited result to full-text complete.
+Each app run persists an app-facing manifest alongside the single-paper engine manifest or the final batch JSONL. The engine writes batch JSONL once; it is used for exit reconciliation, never watched for live progress. Results are projected by original input index; completion order is separate. Structured acceptance is used when present. Local verification can lower a result but never raise a limited result to full-text complete.
+
+The runner validates protocol-1 stderr lines marked `paper_fetch_progress: true`, binds the first `run_started.run_id` to that process, and maps 1-based engine indexes through `executionIndexes`. Ordinary stderr diagnostics remain available. Terminal events enqueue archival in arrival order; already terminal items are not imported again at exit. The UI shows `acceptance` until archival completes. Older app manifests default `stageStartedAt` and `assetProgress` to null.
+
+`POST /api/v1/projects/:projectId/fetch/:runId/items/:index/cancel` maps to `fetch.cancelItem(projectId, runId, index)` through service client, IPC and preload. Whole-run cancellation retains the existing `/cancel` endpoint. Both send `{protocol_version: 1, run_id, command: "cancel", index}` on stdin (null index cancels the run). Normal cancellation does not kill the process; service shutdown retains process termination safeguards. Duplicate inputs remain separate indexes and are deduplicated by the engine, preserving independent cancellation.
 
 New files are staged per run. Imports are safe only when the returned path is canonical and inside the stage, Markdown provenance is trusted, identities match, any reported hash matches, and referenced local assets remain contained. Refresh copies validated assets first and atomically replaces the Markdown last.

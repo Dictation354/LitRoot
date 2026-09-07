@@ -184,6 +184,12 @@ export class LitRootServiceClient {
     })
   }
 
+  cancelFetchItem(projectId: string, runId: string, index: number): Promise<FetchRun> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}/items/${index}/cancel`, fetchRunSchema, {
+      method: 'POST'
+    })
+  }
+
   resumeFetch(projectId: string, runId: string): Promise<FetchRun> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/fetch/${encodeURIComponent(runId)}/resume`, fetchRunSchema, {
       method: 'POST'

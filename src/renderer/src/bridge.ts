@@ -70,6 +70,7 @@ function facade(transport: LitRootTransportBridge): LitRootBridge {
       get: (projectId, runId) => value(transport.fetch.get(projectId, runId)),
       list: (projectId) => value(transport.fetch.list(projectId)),
       cancel: (projectId, runId) => value(transport.fetch.cancel(projectId, runId)),
+      cancelItem: (projectId, runId, index) => value(transport.fetch.cancelItem(projectId, runId, index)),
       resume: (projectId, runId) => value(transport.fetch.resume(projectId, runId))
     },
     feeds: {

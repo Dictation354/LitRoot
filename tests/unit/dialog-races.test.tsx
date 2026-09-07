@@ -16,6 +16,7 @@ import { AddFeedDialog } from '../../src/renderer/src/FeedInbox.js'
 import { LibraryTable } from '../../src/renderer/src/LibraryTable.js'
 import { ProjectDialog } from '../../src/renderer/src/ProjectDialog.js'
 import { defaultLibraryPreferences } from '../../src/renderer/src/library-preferences.js'
+import { itemFor } from '../../src/service/fetch-record.js'
 import { transportFor } from '../renderer-transport.js'
 
 function deferred<T>() {
@@ -291,4 +292,38 @@ describe('dialog request races', () => {
     expect(container.textContent).toContain('Second Journal')
     expect(container.textContent).not.toContain('First Journal')
   })
+})
+
+
+it.each(['single', 'batch', 'refresh', 'batch-refresh'])('shows real stages and item cancellation for %s', async (mode) => {
+  const selectedProject = project('project_test', 'Test')
+  const running = run('run_test', selectedProject.id, new Date().toISOString())
+  running.state = 'running'
+  running.items = [itemFor(1, 'First')]
+  Object.assign(running.items[0]!, { stage: 'assets', state: 'running',
+    assetProgress: { scope: 'source-1', counts: [{ kind: 'formula', completed: 2, total: 4, failed: 0 }] } })
+  if (mode.includes('batch')) running.items.push({ ...itemFor(2, 'Second'), stage: 'acceptance', state: 'running' })
+  const cancelled = structuredClone(running)
+  Object.assign(cancelled.items[0]!, { stage: 'terminal', state: 'cancelled' })
+  const response = deferred<FetchRun>()
+  const cancelItem = vi.fn(() => response.promise)
+  window.litroot = transportFor({ fetch: { list: async () => [running], cancelItem } } as unknown as LitRootBridge)
+  const refresh = mode.includes('refresh') ? { targets: running.items.map((item) => ({ paperId: `paper_${item.index}`, query: item.query })), batch: mode.includes('batch'), skippedCount: 0 } : undefined
+  await act(async () => {
+    root.render(<AddPapersDialog open project={selectedProject} event={null} {...(refresh ? { refresh } : {})} onClose={() => undefined} onOpenPaper={() => undefined} />)
+  })
+  await settle()
+  expect(container.textContent).toContain('资产处理')
+  expect(container.textContent).toContain('公式 已处理 2/4')
+  expect(container.textContent).toContain(`已结束 0/${running.items.length}`)
+  const buttons = [...container.querySelectorAll('button')].filter((button) => button.textContent === '取消此篇')
+  expect(buttons).toHaveLength(1)
+  await act(async () => { buttons[0]!.click() })
+  expect(cancelItem).toHaveBeenCalledWith(selectedProject.id, running.id, 1)
+  expect(buttons[0]!.disabled).toBe(true)
+  expect(container.textContent).toContain('取消中')
+  await act(async () => response.resolve(cancelled))
+  expect(container.textContent).toContain('成功 0')
+  expect(container.textContent).toContain('已取消 1')
+  expect([...container.querySelectorAll('button')].some((button) => button.textContent === '取消此篇')).toBe(false)
 })

@@ -25,8 +25,9 @@ const sandboxBuffer = {
   }
 }
 
+const invocations = []
 const ipcRenderer = {
-  invoke: async () => undefined,
+  invoke: async (...args) => { invocations.push(args) },
   on: () => ipcRenderer,
   removeListener: () => ipcRenderer
 }
@@ -65,5 +66,8 @@ assert.deepEqual(
   'asset payload did not preserve the request'
 )
 assert.deepEqual(encodings, ['base64'], 'packaged preload used a sandbox-incompatible encoding')
+
+await exposedBridge.fetch.cancelItem(request.projectId, 'run_test', 2)
+assert.deepEqual(invocations.at(-1), ['litroot:fetch:cancel-item', request.projectId, 'run_test', 2])
 
 console.log('Packaged preload sandbox regression passed.')

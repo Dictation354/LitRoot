@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -22,9 +22,10 @@ async function fixture(withPaper: boolean | readonly string[] = false) {
     await writePaper(root, 'existing.md', paperMarkdown({ doi: '10.4242/existing', body: 'Old irreplaceable full text.' }))
   }
   const executable = await createFakePaperFetch(join(sandbox, 'bin'))
-  const project = new LitRootProject(await initializeProject(root), new ServiceEventBus(), executable)
+  const events = new ServiceEventBus()
+  const project = new LitRootProject(await initializeProject(root), events, executable)
   await project.start()
-  return { sandbox, root, project, executable }
+  return { sandbox, root, project, executable, events }
 }
 
 async function terminal(project: LitRootProject, runId: string) {
@@ -34,6 +35,7 @@ async function terminal(project: LitRootProject, runId: string) {
 
 afterEach(async () => {
   delete process.env.PAPER_FETCH_ARGS_LOG
+  delete process.env.PAPER_FETCH_TEST_FAILURE
   for (const path of sandboxes.splice(0).reverse()) await rm(path, { recursive: true, force: true })
 })
 
@@ -64,12 +66,95 @@ describe('paper-fetch task orchestration', () => {
     const args = JSON.parse(await readFile(argsLog, 'utf8')) as string[]
     expect(args).toContain('--query-file')
     expect(args).toContain('--batch-results')
-    expect(args).toContain('--run-manifest')
+    expect(args).not.toContain('--run-manifest')
+    expect(args).not.toContain('--resume')
     expect(args).toEqual(expect.arrayContaining([
       '--artifact-mode', 'markdown-assets', '--asset-profile', 'body',
       '--include-refs', 'all', '--max-tokens', 'full_text'
     ]))
     delete process.env.PAPER_FETCH_ARGS_LOG
+    await project.close()
+  })
+
+  it('reports CLI startup errors and restores a saved batch without a paper-fetch manifest', async () => {
+    const { project, executable } = await fixture()
+    process.env.PAPER_FETCH_TEST_FAILURE = 'paper-fetch: error: unrecognized arguments: --run-manifest'
+    const created = await project.fetch.create({
+      projectId: project.layout.id, inputs: ['10.5555/first', '10.5555/second']
+    })
+    const failed = await terminal(project, created.id)
+    for (const item of failed.items) {
+      expect(item.state).toBe('failed')
+      expect(item.reason).toContain('exited with code 2')
+      expect(item.reason).toContain('unrecognized arguments: --run-manifest')
+    }
+    await expect(readFile(join(project.layout.runs, `${created.id}.paper-fetch.json`))).rejects.toMatchObject({ code: 'ENOENT' })
+    await project.close()
+    delete process.env.PAPER_FETCH_TEST_FAILURE
+
+    const reopened = new LitRootProject(project.layout, new ServiceEventBus(), executable)
+    await reopened.start()
+    await reopened.fetch.resume(created.id)
+    const finished = await terminal(reopened, created.id)
+    expect(finished.items.map((item) => item.state)).toEqual(['complete', 'complete'])
+    expect(finished.items.map((item) => item.attempt)).toEqual([2, 2])
+    await reopened.close()
+  })
+
+  it.each([1, 2])('resumes only %i failed batch refresh items and preserves their original targets', async (count) => {
+    const dois = ['10.4242/complete', ...Array.from({ length: count }, (_, index) => `10.4242/retry-${index}`)]
+    const { sandbox, project } = await fixture(dois)
+    const argsLog = join(sandbox, 'resume-args.json')
+    process.env.PAPER_FETCH_ARGS_LOG = argsLog
+    const papers = project.search({ projectId: project.layout.id }).items
+    const byDoi = new Map(papers.map((paper) => [paper.doi, paper]))
+    const created = await project.fetch.create({
+      projectId: project.layout.id, inputs: dois,
+      refreshPaperIds: dois.map((doi) => byDoi.get(doi)?.id ?? '')
+    })
+    const first = await terminal(project, created.id)
+    expect(first.items.map((item) => item.state)).toEqual(['complete', ...Array(count).fill('failed')])
+    expect(first.items[1]?.reason).toBe('Fake network failure')
+
+    await project.fetch.resume(created.id)
+    const finished = await terminal(project, created.id)
+    expect(finished.items[0]).toEqual(first.items[0])
+    expect(finished.items.map((item) => item.state)).toEqual(dois.map(() => 'complete'))
+    expect(finished.items.slice(1).map((item) => item.attempt)).toEqual(Array(count).fill(2))
+    expect(finished.executionIndexes).toEqual(Array.from({ length: count }, (_, index) => index + 2))
+    for (const doi of dois) {
+      const paper = byDoi.get(doi)!
+      const relativePath = project.getPaper(paper.id)?.relativePath ?? ''
+      expect(await readFile(join(project.layout.root, relativePath), 'utf8')).toContain(`Fetched ${doi}`)
+    }
+    const args = JSON.parse(await readFile(argsLog, 'utf8')) as string[]
+    expect(args).toContain('--overwrite')
+    expect(args).not.toContain('--resume')
+    expect(args).not.toContain('--run-manifest')
+    if (count > 1) {
+      expect(await readFile(args[args.indexOf('--query-file') + 1]!, 'utf8')).toBe(`${dois.slice(1).join('\n')}\n`)
+    } else {
+      expect(args[args.indexOf('--query') + 1]).toBe(dois[1])
+    }
+    await project.close()
+  })
+
+  it('does not reuse old JSONL records when a resumed batch exits before writing results', async () => {
+    const { project } = await fixture()
+    const created = await project.fetch.create({
+      projectId: project.layout.id, inputs: ['10.5555/complete', 'retry first', 'retry second']
+    })
+    const first = await terminal(project, created.id)
+    expect(first.items.map((item) => item.state)).toEqual(['complete', 'failed', 'failed'])
+    process.env.PAPER_FETCH_TEST_FAILURE = 'paper-fetch: output directory is not writable'
+    await project.fetch.resume(created.id)
+    const finished = await terminal(project, created.id)
+    expect(finished.items[0]).toEqual(first.items[0])
+    for (const item of finished.items.slice(1)) {
+      expect(item.state).toBe('failed')
+      expect(item.reason).toContain('output directory is not writable')
+      expect(item.reason).toContain('exited with code 2')
+    }
     await project.close()
   })
 
@@ -240,4 +325,67 @@ describe('paper-fetch task orchestration', () => {
     expect(reopened.fetch.get(created.id).state).toBe('interrupted')
     await reopened.close()
   })
+  it('archives early terminals, parses split and joined progress lines, and ignores stale and duplicate events', async () => {
+    const { project, events } = await fixture()
+    const scopes: string[] = []
+    const unsubscribe = events.subscribe((event) => {
+      if (event.type === 'fetch.changed' && event.run.items[0]?.assetProgress) scopes.push(event.run.items[0].assetProgress.scope)
+    })
+    const created = await project.fetch.create({ projectId: project.layout.id,
+      inputs: ['slow protocol noise', '10.5555/early'] })
+    await waitFor(() => project.fetch.get(created.id).items[1]?.state === 'complete')
+    expect(project.fetch.get(created.id).state).toBe('running')
+    expect(project.search({ projectId: project.layout.id }).total).toBe(1)
+    expect(scopes).toContain('fragmented')
+    expect(project.fetch.get(created.id).items[0]?.stage).toBe('assets')
+    await expect(readFile(join(project.layout.runs, `${created.id}.results.jsonl`))).rejects.toMatchObject({ code: 'ENOENT' })
+    const cancelling = await project.fetch.cancelItem(created.id, 1)
+    expect(cancelling.items[0]?.state).toBe('cancelling')
+    expect(cancelling.state).toBe('running')
+    const done = await terminal(project, created.id)
+    expect(done.items.map((item) => item.state)).toEqual(['cancelled', 'complete'])
+    expect(project.search({ projectId: project.layout.id }).total).toBe(1)
+    unsubscribe()
+    await project.close()
+  })
+
+  it('cancels a queued item without stopping another running item', async () => {
+    const { project } = await fixture()
+    const created = await project.fetch.create({ projectId: project.layout.id,
+      inputs: ['10.5555/queued', 'slow remaining'] })
+    await waitFor(() => project.fetch.get(created.id).items[1]?.stage === 'assets')
+    await project.fetch.cancelItem(created.id, 1)
+    const done = await terminal(project, created.id)
+    expect(done.items.map((item) => item.state)).toEqual(['cancelled', 'complete'])
+    expect(project.search({ projectId: project.layout.id }).total).toBe(1)
+    await project.close()
+  })
+
+  it.each([false, true])('keeps existing full text on cancelled refresh (batch=%s)', async (batch) => {
+    const { project, root } = await fixture(batch ? ['10.4242/existing', '10.4242/another'] : true)
+    const papers = project.search({ projectId: project.layout.id }).items
+    const paper = papers.find((item) => item.doi === '10.4242/existing')!
+    const old = await readFile(join(root, 'papers', 'existing.md'), 'utf8')
+    const created = await project.fetch.create({ projectId: project.layout.id,
+      inputs: batch ? ['10.4242/existing slow', '10.4242/another'] : ['10.4242/existing slow'],
+      ...(batch ? { refreshPaperIds: [paper.id, papers.find((item) => item.doi === '10.4242/another')!.id] } : { refreshPaperId: paper.id }) })
+    await waitFor(() => project.fetch.get(created.id).items[0]?.stage === 'assets')
+    await project.fetch.cancelItem(created.id, 1)
+    expect((await terminal(project, created.id)).items[0]?.state).toBe('cancelled')
+    expect(await readFile(join(root, 'papers', 'existing.md'), 'utf8')).toBe(old)
+    expect(project.search({ projectId: project.layout.id }).total).toBe(batch ? 2 : 1)
+    await project.close()
+  })
+
+  it('rejects an old engine before creating or resuming a run', async () => {
+    const { project, executable } = await fixture()
+    const created = await project.fetch.create({ projectId: project.layout.id, inputs: ['failed paper'] })
+    await terminal(project, created.id)
+    await writeFile(executable, (await readFile(executable, 'utf8')).replace('--progress auto|text|jsonl|none --control-stdin', '--query'))
+    await expect(project.fetch.create({ projectId: project.layout.id, inputs: ['new paper'] })).rejects.toMatchObject({ code: 'paper_fetch_upgrade_required' })
+    await expect(project.fetch.resume(created.id)).rejects.toMatchObject({ code: 'paper_fetch_upgrade_required' })
+    expect(project.fetch.list()).toHaveLength(1)
+    await project.close()
+  })
+
 })

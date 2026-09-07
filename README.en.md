@@ -51,9 +51,11 @@ Metadata merges as “project override > fetched value.” A missing key inherit
 
 ## Fetch and acceptance
 
-LitRoot never reimplements retrieval. It calls `paper-fetch fetch --query` for one input and uses a UTF-8 query file, JSONL results, and a run manifest for batches. Every archive explicitly requests:
+LitRoot never reimplements retrieval. It calls `paper-fetch fetch --query` for one input and uses a UTF-8 query file and a final JSONL result file for batches; single fetches retain their manifest. Both use stderr JSONL progress events and stdin cancellation commands. Every archive explicitly requests:
 
 ```text
+--progress jsonl
+--control-stdin
 --artifact-mode markdown-assets
 --asset-profile body
 --include-refs all
@@ -63,6 +65,10 @@ LitRoot never reimplements retrieval. It calls `paper-fetch fetch --query` for o
 Each item reports identity, candidates, provider, attempts, stages, and the final `complete / degraded / limited / failed / action_required` acceptance state. A top-level `status=ok` is not full-text proof; abstract-only and metadata-only results are at most `limited`.
 
 New results first land in `.litroot/tmp/`. Identity, trusted front matter, content level, asset containment, real paths, and SHA-256 are checked before archival. A refresh that is not full text or fails asset validation leaves the old full text untouched. Notes and metadata overrides are never part of refresh replacement.
+
+Single and batch fetches and refreshes show stages, elapsed stage time, and asset counts for the current source/pass. Each result is validated and archived as soon as its terminal event arrives. Item cancellation first shows “cancelling” and becomes “cancelled” after engine confirmation; other inputs continue. Results already entering archival finish that transaction. Cancelled refreshes preserve existing full text, and cancelled partial output stays in staging until an explicit resume.
+
+Dependency diagnostics and create/resume check for `--progress` and `--control-stdin`. Engines lacking these interfaces must be upgraded.
 
 ## Security boundary
 
