@@ -326,11 +326,13 @@ export class ProjectDatabase {
     `).run(paperId)
   }
 
-  setIssue(relativePath: string, message: string): void {
-    this.database.prepare(`
+  setIssue(relativePath: string, message: string): boolean {
+    const result = this.database.prepare(`
       INSERT INTO issues(relative_path, message, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(relative_path) DO UPDATE SET message = excluded.message, updated_at = excluded.updated_at
+      WHERE issues.message <> excluded.message
     `).run(relativePath, message, now())
+    return result.changes > 0
   }
 
   removeMissing(

@@ -31,6 +31,19 @@ function add(
 }
 
 describe('project FTS index', () => {
+  it('only changes an issue when it is new or its message changes', () => {
+    const database = new ProjectDatabase(':memory:')
+    try {
+      expect(database.setIssue('papers/copy.md', 'Duplicate paper')).toBe(true)
+      expect(database.setIssue('papers/copy.md', 'Duplicate paper')).toBe(false)
+      expect(database.setIssue('papers/copy.md', 'Invalid Markdown')).toBe(true)
+      expect(database.setIssue('papers/copy.md', 'Invalid Markdown')).toBe(false)
+      expect(database.summary().issueCount).toBe(1)
+    } finally {
+      database.close()
+    }
+  })
+
   it('migrates an existing v1 cache to the date-aware schema', () => {
     const directory = mkdtempSync(join(tmpdir(), 'litroot-database-'))
     const path = join(directory, 'index.sqlite3')

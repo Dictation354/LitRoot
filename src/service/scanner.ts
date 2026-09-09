@@ -119,8 +119,7 @@ export class ProjectScanner {
           try {
             knownStored = await this.metadata.read(knownPaperId) ?? undefined
           } catch (error) {
-            announce()
-            this.database.setIssue(candidate.relativePath, error instanceof Error ? error.message : String(error))
+            if (this.database.setIssue(candidate.relativePath, error instanceof Error ? error.message : String(error))) announce()
             counts.issues += 1
             continue
           }
@@ -136,8 +135,7 @@ export class ProjectScanner {
         const parsed = parsePaperMarkdown(raw, fallbackMarkdownName(candidate.path))
         if (parsed.kind === 'ignore') continue
         if (parsed.kind === 'issue') {
-          announce()
-          this.database.setIssue(candidate.relativePath, parsed.reason)
+          if (this.database.setIssue(candidate.relativePath, parsed.reason)) announce()
           counts.issues += 1
           continue
         }
@@ -153,23 +151,31 @@ export class ProjectScanner {
           try {
             stored = await this.metadata.read(paperId)
           } catch (error) {
-            announce()
-            this.database.setIssue(candidate.relativePath, error instanceof Error ? error.message : String(error))
+            if (this.database.setIssue(candidate.relativePath, error instanceof Error ? error.message : String(error))) announce()
             counts.issues += 1
             continue
           }
         }
+        const indexed = this.database.reference(paperId)
+        const ownerPath = indexed && seenCandidates.has(indexed.relativePath)
+          ? indexed.relativePath
+          : stored && seenCandidates.has(stored.sourcePath) ? stored.sourcePath : null
+        if (ownerPath && ownerPath !== candidate.relativePath) {
+          if (this.database.setIssue(candidate.relativePath, `论文 ${paperId} 与 ${ownerPath} 冲突。`)) announce()
+          counts.issues += 1
+          continue
+        }
+
         const overrides = stored?.overrides ?? {}
         const effective = mergeMetadata(parsed.paper.metadata, overrides)
         const duplicate = effective.doi
           ? this.database.findByDoi(effective.doi, paperId)
           : null
         if (duplicate) {
-          announce()
-          this.database.setIssue(
+          if (this.database.setIssue(
             candidate.relativePath,
             `DOI ${effective.doi} 与 ${duplicate.relativePath} 冲突。`
-          )
+          )) announce()
           counts.issues += 1
           continue
         }
