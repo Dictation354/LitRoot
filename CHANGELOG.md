@@ -2,6 +2,16 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.1.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.2) — 2026-09-12
+
+### Fixed
+
+- Archive fetched papers directly in `papers/` using the generated filename, without an identity-based subdirectory.
+- Refuse to overwrite existing papers or attachments when filenames collide, and report the conflict.
+- Preserve relative image paths when copying local attachments into the archive.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.1.1...v1.1.2)
+
 ## [1.1.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.1) — 2026-09-09
 
 ### Fixed

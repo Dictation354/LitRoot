@@ -2,6 +2,16 @@
 
 [English](CHANGELOG.md)
 
+## [1.1.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.2) — 2026-09-12
+
+### 修复
+
+- 抓取的论文保留生成的文件名，直接归档到 `papers/`，不再创建基于论文身份的子目录。
+- 论文或附件重名时拒绝覆盖已有文件，并提示冲突。
+- 复制本地附件到归档目录时保留图片相对路径。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.1.1...v1.1.2)
+
 ## [1.1.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.1) — 2026-09-09
 
 ### 修复
