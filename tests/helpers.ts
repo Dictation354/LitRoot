@@ -72,6 +72,7 @@ Fake abstract.
 \${kind === 'fulltext' ? 'Complete fake full text body.' : 'Only an abstract is available.'}
 
 \${query.includes('missing asset') ? '![Missing figure](assets/missing.png)' : ''}
+\${query.includes('local asset') ? '![Local figure](assets/figure.png)' : ''}
 \`
 }
 const record = async (query, index, outputDir, completionOrder) => {
@@ -84,6 +85,10 @@ const record = async (query, index, outputDir, completionOrder) => {
     ? \`FetchBot_2025_\${'A'.repeat(165)}.md\`
     : \`FetchBot_2025_Fetched_paper_\${index}.md\`
   const output = join(outputDir, filename)
+  if (query.includes('local asset')) {
+    await mkdir(join(outputDir, 'assets'), { recursive: true })
+    await writeFile(join(outputDir, 'assets', 'figure.png'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  }
   await writeFile(output, raw)
   const doi = raw.match(/doi: "([^"]+)/)?.[1] || null
   return { schema_version: 2, index, attempt: 1, record_status: 'completed', doi, output_artifacts: [{ kind: 'primary_markdown', path: output, sha256: hash(raw) }], acceptance: { overall: kind === 'fulltext' ? 'complete' : 'limited', content: { status: kind } }, completion_order: completionOrder }

@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ServiceEventBus } from '../../src/service/events.js'
 import { initializeProject } from '../../src/service/project-layout.js'
@@ -177,7 +177,7 @@ describe('paper-fetch task orchestration', () => {
     await project.close()
   })
 
-  it('keeps the paper-fetch generated filename for a single-paper archive', async () => {
+  it('archives the generated filename directly in papers without a hash directory', async () => {
     const { sandbox, project } = await fixture()
     const argsLog = join(sandbox, 'paper-fetch-single-args.json')
     process.env.PAPER_FETCH_ARGS_LOG = argsLog
@@ -189,9 +189,51 @@ describe('paper-fetch task orchestration', () => {
     const run = await terminal(project, created.id)
     const expectedFilename = `FetchBot_2025_${'A'.repeat(165)}.md`
 
-    expect(run.items[0]?.outputPath && basename(run.items[0].outputPath)).toBe(expectedFilename)
+    expect(run.items[0]?.state).toBe('complete')
+    expect(run.items[0]?.outputPath).toBe(join(project.layout.papers, expectedFilename))
+    expect(await readdir(project.layout.papers)).toEqual([expectedFilename])
     expect(JSON.parse(await readFile(argsLog, 'utf8')) as string[]).not.toContain('--output')
     delete process.env.PAPER_FETCH_ARGS_LOG
+    await project.close()
+  })
+
+  it('preserves an existing paper when a different DOI produces the same filename', async () => {
+    const { project } = await fixture()
+    const first = await project.fetch.create({ projectId: project.layout.id, inputs: ['10.5555/first'] })
+    const saved = (await terminal(project, first.id)).items[0]!
+    const original = await readFile(saved.outputPath!, 'utf8')
+    const second = await project.fetch.create({ projectId: project.layout.id, inputs: ['10.5555/second'] })
+    const rejected = (await terminal(project, second.id)).items[0]!
+
+    expect(rejected).toMatchObject({ state: 'failed', errorCode: 'archive_commit_failed' })
+    expect(rejected.reason).toContain('重名')
+    expect(await readFile(saved.outputPath!, 'utf8')).toBe(original)
+    expect(await readdir(project.layout.papers)).toEqual(['FetchBot_2025_Fetched_paper_1.md'])
+    expect(project.search({ projectId: project.layout.id }).total).toBe(1)
+    await project.close()
+  })
+
+  it.each([false, true])('preserves relative image paths and refuses asset collisions (existing=%s)', async (existing) => {
+    const { project } = await fixture()
+    const asset = join(project.layout.papers, 'assets', 'figure.png')
+    if (existing) {
+      await mkdir(join(project.layout.papers, 'assets'))
+      await writeFile(asset, 'Existing image bytes')
+    }
+    const created = await project.fetch.create({ projectId: project.layout.id, inputs: ['local asset'] })
+    const item = (await terminal(project, created.id)).items[0]!
+
+    if (existing) {
+      expect(item).toMatchObject({ state: 'failed', errorCode: 'archive_commit_failed' })
+      expect(item.reason).toContain('重名')
+      expect(await readFile(asset, 'utf8')).toBe('Existing image bytes')
+      expect(await readdir(project.layout.papers)).toEqual(['assets'])
+    } else {
+      expect(item.state).toBe('complete')
+      expect(item.outputPath).toBe(join(project.layout.papers, 'FetchBot_2025_Fetched_paper_1.md'))
+      expect(await readFile(item.outputPath!, 'utf8')).toContain('![Local figure](assets/figure.png)')
+      expect(await readFile(asset)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    }
     await project.close()
   })
 

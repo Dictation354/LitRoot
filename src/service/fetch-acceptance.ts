@@ -263,12 +263,6 @@ export class FetchAcceptance {
 
     const parsed = parsePaperMarkdown(raw, safeOutputBasename(output))
     if (parsed.kind !== 'paper') throw new Error('暂存 Markdown 不是可信论文。')
-    const provisionalRelative = `papers/${safeOutputBasename(output)}`
-    const identityPaperId = paperIdFor(
-      parsed.paper.metadata.doi || null,
-      parsed.paper.metadata.url || item.canonicalUrl,
-      provisionalRelative
-    )
     const duplicate = parsed.paper.metadata.doi
       ? this.database.findByDoi(parsed.paper.metadata.doi)
       : null
@@ -277,17 +271,21 @@ export class FetchAcceptance {
       item.reason = '同批或当前项目中的相同 DOI 已存在；本项映射到现有论文。'
       return duplicate.filePath || duplicate.relativePath
     }
-    const archiveDirectory = parsed.paper.metadata.doi || parsed.paper.metadata.url || item.canonicalUrl
-      ? identityPaperId
-      : `paper-${sha256(item.query).slice(0, 16)}`
-    const directory = join(this.layout.papers, archiveDirectory)
+    const directory = this.layout.papers
     await mkdir(directory, { recursive: true })
     if (!isPathInside(this.layout.root, await canonicalDirectory(directory))) {
       throw new Error('归档目录通过符号链接越出了项目。')
     }
     const target = join(directory, safeOutputBasename(output))
-    await this.copyAssets(output, target, assetSources)
-    await atomicWriteFile(target, raw)
+    try {
+      await this.copyAssets(output, target, assetSources)
+      await atomicWriteFile(target, raw, false)
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
+        throw new Error('归档文件或附件重名，已有文件未覆盖。请调整已有文件名或使用刷新功能。')
+      }
+      throw error
+    }
     return target
   }
 
@@ -305,7 +303,7 @@ export class FetchAcceptance {
         throw new Error(`资产目标目录越出项目：${source}`)
       }
       const data = await readFile(canonical)
-      await atomicWriteFile(to, data)
+      await atomicWriteFile(to, data, false)
     }
   }
 

@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { mkdir, open, realpath, rename, stat, unlink } from 'node:fs/promises'
+import { link, mkdir, open, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -29,7 +29,7 @@ export async function canonicalFileInside(
   }
 }
 
-export async function atomicWriteFile(path: string, content: string | Uint8Array): Promise<void> {
+export async function atomicWriteFile(path: string, content: string | Uint8Array, overwrite = true): Promise<void> {
   const directory = dirname(path)
   await mkdir(directory, { recursive: true })
   const temporaryPath = resolve(directory, `.${basename(path)}.${randomUUID()}.tmp`)
@@ -41,7 +41,13 @@ export async function atomicWriteFile(path: string, content: string | Uint8Array
     } finally {
       await file.close()
     }
-    await rename(temporaryPath, path)
+    if (overwrite) {
+      await rename(temporaryPath, path)
+    } else {
+      // Publish the complete file atomically, refusing an existing name even across concurrent runs.
+      await link(temporaryPath, path)
+      await unlink(temporaryPath)
+    }
   } catch (error) {
     await unlink(temporaryPath).catch(() => undefined)
     throw error
