@@ -201,6 +201,9 @@ describe('project lifecycle', () => {
       await waitFor(() => project.summary().issueCount === 1)
       await unlink(original)
       await waitFor(() => project.getPaper(paperId)?.relativePath === 'papers/a.md')
+      // The scanner updates the index before the asynchronous metadata write finishes.
+      await waitFor(async () => (await readFile(join(layout.metadata, `${paperId}.yaml`), 'utf8'))
+        .includes('source_path: papers/a.md'))
       expect(project.summary()).toMatchObject({ paperCount: 1, issueCount: 0 })
       expect(project.getPaper(paperId)).toMatchObject({ title: 'Duplicate version', journal: 'My journal' })
       expect((await project.readNote('paper', paperId)).content).toContain('Keep this note.')
