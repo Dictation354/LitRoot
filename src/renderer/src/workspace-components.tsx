@@ -490,7 +490,10 @@ export function LibraryWorkspace({
         onExport={onExport}
       />
       <footer className="library-footer">
-        <span>{total === 0 ? '无文献' : `${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}`}</span>
+        <span className="library-footer-status" role="status">
+          {total === 0 ? '无文献' : `${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}`}
+          {selectedPaperIds.length > 0 && ` · 已选 ${selectedPaperIds.length} 篇`}
+        </span>
         <div>
           <label>每页条数 <select aria-label="每页条数" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
             {[20, 50, 100, 200].map((value) => <option value={value} key={value}>{value}</option>)}

@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.1.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.3) — 2026-09-13
+
+### Fixed
+
+- Move the selected-paper count to the existing pagination footer so selecting papers no longer shifts the library table or causes a double-click to hit another paper.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.1.2...v1.1.3)
+
 ## [1.1.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.2) — 2026-09-12
 
 ### Fixed

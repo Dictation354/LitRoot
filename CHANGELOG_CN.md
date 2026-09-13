@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md)
 
+## [1.1.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.3) — 2026-09-13
+
+### 修复
+
+- 将已选文献数量移至现有底部分页栏，修复选中文献后列表位移、导致双击误点其他文献的问题。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.1.2...v1.1.3)
+
 ## [1.1.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.2) — 2026-09-12
 
 ### 修复

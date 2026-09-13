@@ -605,6 +605,7 @@ button.workspace-tab { cursor: pointer; }
 .table-empty span, .table-loading { font-size: 12px; }
 .library-footer { min-height: 39px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 5px 10px 5px 14px; border-top: 1px solid #daddd8; background: #f5f6f4; color: var(--muted); font-size: 12px; }
 .library-footer > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.library-footer-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-footer button { padding: 4px 8px; font-size: 13px; }
 
 .reader-workspace .reader-panel { min-height: 0; }
@@ -642,7 +643,6 @@ button.workspace-tab { cursor: pointer; }
 .modal details { overflow-wrap: anywhere; }
 .drafts-modal { height: min(760px, 92vh); grid-template-rows: auto minmax(0, 1fr); }
 .drafts-modal .note-editor { flex: 1; }
-.library-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 6px 42px 6px 12px; font-size: 13px; }
 .column-resizer:focus-visible { outline: 2px solid var(--green); background: #dce8df; }
 .reader-toc { position: absolute; right: 8px; top: 100%; width: min(360px, calc(100% - 16px)); max-height: min(60vh, 500px); overflow: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 7px; box-shadow: var(--shadow); }
 .reader-toc button { display: block; width: 100%; border: 0; background: transparent; text-align: left; white-space: normal; overflow-wrap: anywhere; }

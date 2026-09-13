@@ -309,9 +309,6 @@ export function LibraryTable({
 
   return (
     <div className="library-table-frame" aria-busy={loading}>
-      {selectedPaperIds.length > 0 && <div className="library-selection">
-        <span>已选 {selectedPaperIds.length} 篇</span>
-      </div>}
       <div className="library-table-scroll">
         <div className="library-table" role="grid" aria-multiselectable="true" style={{ minWidth }} aria-label="文献列表">
           <div className="table-header" role="rowgroup">
