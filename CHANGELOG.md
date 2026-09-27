@@ -2,7 +2,7 @@
 
 [中文](CHANGELOG_CN.md)
 
-## Unreleased
+## 1.1.4 — 2026-09-27
 
 - Require paper-fetch 7.0.1+ stable and JSONL progress/control support before creating or resuming tasks.
 - Preserve official Windows installer configuration with user overrides taking precedence.
