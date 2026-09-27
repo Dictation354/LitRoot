@@ -46,7 +46,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 const args = process.argv.slice(2)
-if (process.env.PAPER_FETCH_ARGS_LOG) await writeFile(process.env.PAPER_FETCH_ARGS_LOG, JSON.stringify(args))
+if (args[0] === 'fetch' && !args.includes('--help') && process.env.PAPER_FETCH_ARGS_LOG) await writeFile(process.env.PAPER_FETCH_ARGS_LOG, JSON.stringify(args))
 const value = (flag) => { const index = args.indexOf(flag); return index >= 0 ? args[index + 1] : null }
 const hash = (data) => createHash('sha256').update(data).digest('hex')
 const markdown = (query, kind = 'fulltext') => {
@@ -75,10 +75,10 @@ Fake abstract.
 \${query.includes('local asset') ? '![Local figure](assets/figure.png)' : ''}
 \`
 }
-const record = async (query, index, outputDir, completionOrder) => {
-  if (query.includes('ambiguous')) return { schema_version: 2, index, attempt: 1, record_status: 'failed', error: { status: 'ambiguous', candidates: [{ doi: '10.5555/candidate', title: 'Candidate paper' }] }, acceptance: { overall: 'action_required' }, completion_order: completionOrder }
-  if (query.includes('auth')) return { schema_version: 2, index, attempt: 1, record_status: 'failed', source: 'fakepaywall', error: { status: 'no_access', reason: 'Authentication required' }, acceptance: { overall: 'action_required' }, completion_order: completionOrder }
-  if (query.includes('failed') || (query.includes('retry') && !args.includes('--overwrite'))) return { schema_version: 2, index, attempt: 1, record_status: 'failed', error: { status: 'error', code: 'network_error', reason: 'Fake network failure' }, acceptance: { overall: 'failed' }, completion_order: completionOrder }
+const record = async (query, index, outputDir) => {
+  if (query.includes('ambiguous')) return { schema_version: 2, index, attempt: 1, record_status: 'failed', error: { status: 'ambiguous', candidates: [{ doi: '10.5555/candidate', title: 'Candidate paper' }] }, acceptance: { overall: 'action_required' } }
+  if (query.includes('auth')) return { schema_version: 2, index, attempt: 1, record_status: 'failed', source: null, error: { status: 'auth_required', provider: 'wiley', reason: 'Authentication required' }, acceptance: { overall: 'action_required' } }
+  if (query.includes('failed') || (query.includes('retry') && !args.includes('--overwrite'))) return { schema_version: 2, index, attempt: 1, record_status: 'failed', error: { status: 'error', code: 'network_error', reason: 'Fake network failure' }, acceptance: { overall: 'failed' } }
   const kind = query.includes('limited') ? 'abstract_only' : 'fulltext'
   const raw = markdown(query, kind)
   const filename = query.includes('generated-name')
@@ -91,10 +91,11 @@ const record = async (query, index, outputDir, completionOrder) => {
   }
   await writeFile(output, raw)
   const doi = raw.match(/doi: "([^"]+)/)?.[1] || null
-  return { schema_version: 2, index, attempt: 1, record_status: 'completed', doi, output_artifacts: [{ kind: 'primary_markdown', path: output, sha256: hash(raw) }], acceptance: { overall: kind === 'fulltext' ? 'complete' : 'limited', content: { status: kind } }, completion_order: completionOrder }
+  return { schema_version: 2, index, attempt: 1, record_status: 'completed', doi, output_artifacts: [{ kind: 'primary_markdown', path: output, sha256: hash(raw) }], acceptance: { overall: kind === 'fulltext' ? 'complete' : 'limited', content: { status: kind } } }
 }
 
-if (args[0] === '--version') { console.log('paper-fetch 6.1.5-fake'); process.exit(0) }
+if (args[0] === '--version') { console.log('paper-fetch 7.0.1'); process.exit(0) }
+if (args[0] === 'auth' && args.includes('--help')) { console.log('positional arguments: {wiley,science}'); process.exit(0) }
 if (args[0] !== 'fetch') process.exit(2)
 if (args.includes('--help')) { console.log('--progress auto|text|jsonl|none --control-stdin'); process.exit(0) }
 if (args.includes('--run-manifest') || args.includes('--resume')) {
@@ -162,11 +163,11 @@ for (let position = queries.length - 1; position >= 0; position -= 1) {
   }
   const result = cancelled.has(index)
     ? { index, record_status: 'aborted', error: { status: 'aborted', code: 'request_cancelled', reason: 'Cancelled by control' } }
-    : await record(query, index, outputDir, queries.length - position)
+    : await record(query, index, outputDir)
   result.run_id = runId
   results.push(result)
   finished.add(index)
-  event('terminal', index, { record: result })
+  if (!query.includes('missing event')) event('terminal', index, { record: result })
   if (query.includes('protocol noise')) event('terminal', index, { record: result })
 }
 if (value('--query-file')) {

@@ -28,3 +28,13 @@ describe('paper-fetch command descriptor', () => {
     expect(() => paperFetchCommandFromEnvironment()).toThrow('bounded JSON string array')
   })
 })
+
+it('applies installer defaults only when an inherited value is empty', async () => {
+  const { paperFetchEnvironment } = await import('../../src/service/paper-fetch-command.js')
+  const command = { executable: 'python.exe', prefixArgs: [], envDefaults: { PAPER_FETCH_ENV_FILE: 'C:\\Paper Fetch\\offline.env' } }
+  expect(paperFetchEnvironment(command, {})).toEqual(command.envDefaults)
+  expect(paperFetchEnvironment(command, { PAPER_FETCH_ENV_FILE: '' })).toEqual(command.envDefaults)
+  expect(paperFetchEnvironment(command, { PAPER_FETCH_ENV_FILE: 'custom.env', OTHER: 'kept' }))
+    .toEqual({ PAPER_FETCH_ENV_FILE: 'custom.env', OTHER: 'kept' })
+  expect(paperFetchEnvironment({ executable: 'paper-fetch.exe', prefixArgs: [] }, {})).toEqual({})
+})

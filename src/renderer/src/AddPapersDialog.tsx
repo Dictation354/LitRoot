@@ -28,6 +28,7 @@ const stateLabel: Record<FetchRun['items'][number]['state'], string> = {
   limited: '受限',
   failed: '失败',
   action_required: '需要操作',
+  not_scheduled: '未调度',
   cancelled: '已取消'
 }
 
@@ -108,7 +109,7 @@ export function AddPapersDialog({
 
   useEffect(() => setPage(0), [selectedRun?.id])
   const counts = useMemo(() => {
-    const result = { ended: 0, complete: 0, degraded: 0, failed: 0, limited: 0, action_required: 0, cancelled: 0 }
+    const result = { ended: 0, complete: 0, degraded: 0, failed: 0, limited: 0, action_required: 0, not_scheduled: 0, cancelled: 0 }
     for (const item of selectedRun?.items ?? []) {
       if (item.stage === 'terminal') result.ended += 1
       if (Object.hasOwn(result, item.state)) result[item.state as keyof typeof result] += 1
@@ -224,14 +225,14 @@ export function AddPapersDialog({
                     {['queued', 'running', 'cancelling'].includes(selectedRun.state) && (
                       <button type="button" disabled={submitting || Boolean(pendingAction) || selectedRun.state === 'cancelling'} onClick={() => void runAction('cancel', selectedRun)}>取消整批</button>
                     )}
-                    {['interrupted', 'cancelled', 'completed'].includes(selectedRun.state) && selectedRun.items.some((item) => ['failed', 'cancelled', 'action_required'].includes(item.state)) && (
+                    {['interrupted', 'cancelled', 'completed'].includes(selectedRun.state) && selectedRun.items.some((item) => ['failed', 'cancelled', 'not_scheduled', 'action_required'].includes(item.state)) && (
                       <button type="button" disabled={submitting || Boolean(pendingAction)} onClick={() => void runAction('resume', selectedRun)}>继续未完成项</button>
                     )}
                   </div>
                 </div>
                 <p className="fetch-summary" aria-live="polite">
                   已结束 {counts.ended}/{selectedRun.items.length}
-                  {(['complete', 'degraded', 'failed', 'limited', 'action_required', 'cancelled'] as const).map((state) => (
+                  {(['complete', 'degraded', 'failed', 'limited', 'action_required', 'not_scheduled', 'cancelled'] as const).map((state) => (
                     counts[state] > 0 && <span key={state}> · {state === 'complete' ? '成功' : stateLabel[state]} {counts[state]}</span>
                   ))}
                 </p>
@@ -256,13 +257,26 @@ export function AddPapersDialog({
                         {item.assetProgress?.counts.map((count) => (
                           <span key={count.kind}>{assetLabel[count.kind]} 已处理 {count.completed}/{count.total ?? '未知'}{count.failed > 0 ? `，失败 ${count.failed}` : ''}</span>
                         ))}
-                        {item.provider && <span>{item.provider}</span>}
+                        {item.source && <span>来源：{item.source}</span>}
+                        {item.provider && <span>Provider：{item.provider}</span>}
+                        {typeof item.diagnostics?.acquisition?.route === 'string' && <span>获取路线：{item.diagnostics.acquisition.route}</span>}
+                        {item.errorCode && <span>错误码：{item.errorCode}</span>}
+                        {item.completionOrder !== null && <span>完成序号：{item.completionOrder}</span>}
                         {item.contentKind && <span>{item.contentKind}</span>}
                         <span>尝试 {item.attempt}</span>
                       </div>
                       {item.outputPath && <p className="fetch-artifact"><strong>产物：</strong>{item.outputPath}</p>}
                       {item.outputSha256 && <p className="fetch-artifact"><strong>SHA-256：</strong><code>{item.outputSha256}</code></p>}
                       {item.reason && <p>{item.reason}</p>}
+                      {item.diagnostics && <>
+                        {item.diagnostics.failureCodes.length > 0 && <p>失败码：{item.diagnostics.failureCodes.join('、')}</p>}
+                        {item.diagnostics.fallbackCodes.length > 0 && <p>降级码：{item.diagnostics.fallbackCodes.join('、')}</p>}
+                        {item.diagnostics.warningCodes.length > 0 && <p>警告码：{item.diagnostics.warningCodes.join('、')}</p>}
+                        {item.diagnostics.retryAfterSeconds !== null && <p>建议等待：{item.diagnostics.retryAfterSeconds} 秒</p>}
+                        <DiagnosticSummary label="资产" data={item.diagnostics.assetSummary} fields={{ local: '本地', failed: '失败', not_archived: '未归档', remote_only_count: '仅远程', fallback_preview: '预览降级' }} />
+                        <DiagnosticSummary label="内容质量" data={item.diagnostics.semanticLosses} fields={{ table_fallback_count: '表格回退', table_layout_degraded_count: '表格布局降级', table_semantic_loss_count: '表格语义损失', formula_fallback_count: '公式回退', formula_missing_count: '公式缺失' }} />
+                      </>}
+                      {item.authCommand && <p><code>{item.authCommand}</code></p>}
                       </details>
                       <div className="button-row">
                         {['queued', 'running', 'cancelling'].includes(selectedRun.state) && !['terminal', 'acceptance'].includes(item.stage) && (
@@ -273,8 +287,8 @@ export function AddPapersDialog({
                         {item.existingPaperId && (
                           <button type="button" onClick={() => onOpenPaper(item.existingPaperId ?? '')}>打开现有条目</button>
                         )}
-                        {item.reason?.includes('paper-fetch auth') && (
-                          <button type="button" onClick={() => void bridge().system.copyText(item.reason ?? '').catch((error) => setMessage(errorMessage(error)))}>复制人工命令</button>
+                        {item.authCommand && (
+                          <button type="button" onClick={() => void bridge().system.copyText(item.authCommand ?? '').catch((error) => setMessage(errorMessage(error)))}>复制人工命令</button>
                         )}
                         {item.candidates.map((candidate) => (
                           <button
@@ -303,4 +317,15 @@ export function AddPapersDialog({
         </div>
     </dialog>
   )
+}
+
+function DiagnosticSummary({ label, data, fields }: {
+  label: string
+  data: Record<string, unknown> | null
+  fields: Record<string, string>
+}): React.JSX.Element | null {
+  const values = Object.entries(fields).flatMap(([key, title]) => (
+    typeof data?.[key] === 'number' && data[key] > 0 ? [`${title} ${data[key]}`] : []
+  ))
+  return values.length > 0 ? <p>{label}：{values.join('；')}</p> : null
 }

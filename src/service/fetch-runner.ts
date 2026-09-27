@@ -18,15 +18,16 @@ import type { ServiceEventBus } from './events.js'
 import { atomicWriteFile } from './safe-fs.js'
 import { doiFromInput, sha256 } from './identity.js'
 import { errorMessage, LitRootError } from './errors.js'
-import { normalizePaperFetchCommand, type PaperFetchCommand } from './paper-fetch-command.js'
+import { normalizePaperFetchCommand, paperFetchEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
 import {
   itemFor,
+  authenticationRequired,
   parseJsonLines,
   parseManifestDocument,
   parseTerminalRecord,
   type ParsedTerminalRecord
 } from './fetch-record.js'
-import { requirePaperFetchProgress } from './diagnostics.js'
+import { requirePaperFetchProgress, paperFetchAuthCommand } from './diagnostics.js'
 import { FetchAcceptance } from './fetch-acceptance.js'
 
 const progressBase = z.object({
@@ -39,7 +40,7 @@ const progressEventSchema = z.discriminatedUnion('type', [
   progressBase.extend({ type: z.literal('run_started'), index: z.literal(0), total: z.number().int().min(1) }),
   progressBase.extend({ type: z.literal('stage'), stage: z.enum(['queued', 'identity', 'fetching', 'assets', 'validating', 'writing']) }),
   progressBase.extend({ type: z.literal('assets'), ...fetchAssetProgressSchema.shape }),
-  progressBase.extend({ type: z.literal('terminal'), record: z.object({ index: z.number().int().positive(), run_id: z.string().min(1) }).passthrough() }),
+  progressBase.extend({ type: z.literal('terminal'), record: z.object({ index: z.number().int().positive(), run_id: z.string().min(1), record_status: z.enum(['completed', 'failed', 'aborted']) }).passthrough() }),
   progressBase.extend({ type: z.literal('cancel_response'), status: z.enum(['cancelling', 'already_finished', 'invalid_command', 'stale_run']) })
 ])
 
@@ -71,8 +72,7 @@ export class PaperFetchRunner {
   private readonly runs = new Map<string, FetchRun>()
   private readonly engineRunIds = new Map<string, string>()
   private readonly tasks = new Map<string, Promise<void>>()
-  private readonly executable: string
-  private readonly prefixArgs: string[]
+  private readonly command: PaperFetchCommand
   private readonly acceptance: FetchAcceptance
 
   constructor(
@@ -83,8 +83,7 @@ export class PaperFetchRunner {
     command?: string | PaperFetchCommand
   ) {
     const normalized = normalizePaperFetchCommand(command)
-    this.executable = normalized.executable
-    this.prefixArgs = normalized.prefixArgs
+    this.command = normalized
     this.acceptance = new FetchAcceptance(layout, database)
   }
 
@@ -109,6 +108,7 @@ export class PaperFetchRunner {
       if (!entry.isFile() || !/^run_[a-f0-9]{24}\.litroot\.json$/.test(entry.name)) continue
       try {
         const parsed = fetchRunSchema.parse(JSON.parse(await readFile(join(this.layout.runs, entry.name), 'utf8')))
+        parsed.completionCounter = Math.max(parsed.completionCounter, ...parsed.items.map((item) => item.completionOrder ?? 0))
         if (['queued', 'running', 'cancelling'].includes(parsed.state)) parsed.state = 'interrupted'
         this.runs.set(parsed.id, parsed)
         await this.persist(parsed)
@@ -132,7 +132,7 @@ export class PaperFetchRunner {
 
   async create(request: CreateFetchRunRequest): Promise<FetchRun> {
     const normalizedRequest = createFetchRunRequestSchema.parse(request)
-    await requirePaperFetchProgress({ executable: this.executable, prefixArgs: this.prefixArgs })
+    await requirePaperFetchProgress(this.command)
     const runId = `run_${sha256(`${now()}\0${Math.random()}`).slice(0, 24)}`
     const files = this.files(runId)
     const inputs = normalizedRequest.inputs.map((input) => input.trim())
@@ -149,6 +149,7 @@ export class PaperFetchRunner {
       finishedAt: null,
       manifestPath: files.appManifest,
       executionIndexes: [],
+      completionCounter: 0,
       items: inputs.map((input, index) => itemFor(index + 1, input))
     }
     if (run.refreshPaperId && (run.items.length !== 1 || !this.database.reference(run.refreshPaperId))) {
@@ -204,7 +205,7 @@ export class PaperFetchRunner {
     if (!['interrupted', 'cancelled', 'completed'].includes(run.state)) {
       throw new LitRootError('run_not_resumable', '该任务当前不能恢复。', 409)
     }
-    await requirePaperFetchProgress({ executable: this.executable, prefixArgs: this.prefixArgs })
+    await requirePaperFetchProgress(this.command)
     for (const item of run.items) {
       if (['complete', 'degraded', 'limited'].includes(item.state)) continue
       item.stage = 'queued'
@@ -212,6 +213,12 @@ export class PaperFetchRunner {
       item.assetProgress = null
       item.state = 'pending'
       item.attempt += 1
+      item.source = null
+      item.provider = null
+      item.diagnostics = null
+      item.authCommand = null
+      item.candidates = []
+      item.existingPaperId = null
       item.reason = null
       item.errorCode = null
       item.acceptance = null
@@ -390,9 +397,9 @@ export class PaperFetchRunner {
 
   private spawnProcess(run: FetchRun, args: string[]): Promise<ProcessResult> {
     return new Promise((resolveProcess, reject) => {
-      const child = spawn(this.executable, [...this.prefixArgs, ...args], {
+      const child = spawn(this.command.executable, [...this.command.prefixArgs, ...args], {
         cwd: this.layout.root,
-        env: process.env,
+        env: paperFetchEnvironment(this.command),
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe']
       })
@@ -438,9 +445,10 @@ export class PaperFetchRunner {
         const item = index ? run.items[index - 1] : undefined
         if (!index || !item || terminals.has(index) || item.stage === 'terminal') return
         if (event.type === 'terminal') {
-          const record = parseTerminalRecord(event.record)
+          const record = parseTerminalRecord(event.record, event.index, run.executionIndexes.length > 1)
           if (!record || record.index !== event.index || event.record.run_id !== event.run_id) return
           terminals.add(index)
+          item.completionOrder = ++run.completionCounter
           item.stage = 'acceptance'
           item.stageStartedAt = now()
           item.state = 'running'
@@ -504,7 +512,11 @@ export class PaperFetchRunner {
     // Acceptance mutates its item before I/O; publish it only once archival finishes.
     const accepted = copyRun(run)
     await this.acceptance.accept(accepted, index, record, stagingRoot)
-    Object.assign(item, accepted.items[index - 1])
+    const acceptedItem = accepted.items[index - 1]!
+    if (acceptedItem.state === 'action_required' && record.provider && authenticationRequired(record)) {
+      acceptedItem.authCommand = await paperFetchAuthCommand(this.command, record.provider)
+    }
+    Object.assign(item, acceptedItem)
     item.stageStartedAt = now()
   }
 
@@ -522,7 +534,7 @@ export class PaperFetchRunner {
       const values = parseJsonLines(await readFile(path, 'utf8'))
       const latest = new Map<number, ParsedTerminalRecord>()
       for (const value of values) {
-        const record = parseTerminalRecord(value)
+        const record = parseTerminalRecord(value, 1, true)
         if (!record) continue
         const current = latest.get(record.index)
         if (!current || record.attempt >= current.attempt) latest.set(record.index, record)

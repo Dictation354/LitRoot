@@ -24,7 +24,7 @@ describe('paper-fetch record parsing', () => {
     })
     expect(record).toMatchObject({
       index: 2, status: 'ok', canonicalDoi: '10.4242/current', title: 'Current paper',
-      canonicalUrl: 'https://example.test/current', provider: 'publisher',
+      canonicalUrl: 'https://example.test/current', provider: null, source: 'publisher',
       contentKind: 'fulltext', outputPath: '/tmp/current.md', outputSha256: 'ABC123'
     })
     const failure = parseTerminalRecord({
@@ -78,4 +78,25 @@ describe('paper-fetch record parsing', () => {
       state: 'pending'
     })
   })
+})
+
+it('uses error and acquisition provider fields without treating source as a provider', () => {
+  const base = { source: 'wiley_browser', acquisition: { provider: 'wiley' }, provider: 'legacy', error: { provider: 'science', status: 'auth_required', code: 'explicit' } }
+  expect(parseTerminalRecord(base)).toMatchObject({ provider: 'science', source: 'wiley_browser', errorCode: 'explicit' })
+  expect(parseTerminalRecord({ ...base, error: null })?.provider).toBe('wiley')
+  expect(parseTerminalRecord({ source: 'wiley_browser' })?.provider).toBeNull()
+  expect(parseTerminalRecord({ completion_order: 8 })?.completionOrder).toBeNull()
+})
+
+it('fails unknown or incomplete aborted records instead of counting cancellation', () => {
+  for (const value of [
+    { record_status: 'aborted' },
+    { status: 'aborted', acceptance: { overall: 'action_required' } },
+    { record_status: 'aborted', error: { status: 'aborted' } },
+    { record_status: 'aborted', error: { status: 'aborted', code: 'rate_limited' }, acceptance: { overall: 'action_required' } }
+  ]) {
+    const record = parseTerminalRecord(value, 1, true)!
+    expect(record.status).toBe('failed')
+    expect(actionRequired(record)).toBe(false)
+  }
 })

@@ -6,7 +6,7 @@ import { app } from 'electron'
 import type { DependencyReport, RuntimeOption, RuntimeTarget, ServiceEvent } from '../shared/contracts.js'
 import { runtimeTargetKey } from '../shared/contracts.js'
 import { dependencyRepair } from '../shared/dependency-repair.js'
-import type { PaperFetchCommand } from '../service/paper-fetch-command.js'
+import { paperFetchEnvironment, type PaperFetchCommand } from '../service/paper-fetch-command.js'
 import { LitRootServiceClient } from './service-client.js'
 import {
   cleanWslOutput,
@@ -78,7 +78,10 @@ export async function windowsPaperFetchCommand(path: string): Promise<PaperFetch
   }
   const python = join(root, 'runtime', 'python.exe')
   await access(python)
-  return { executable: python, prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli'] }
+  return {
+    executable: python, prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli'],
+    envDefaults: { PAPER_FETCH_ENV_FILE: join(root, 'offline.env') }
+  }
 }
 
 async function resolveLocalPaperFetch(): Promise<PaperFetchCommand> {
@@ -227,7 +230,7 @@ export class ServiceRuntimeManager {
       executable = process.execPath
       args = [servicePath]
       env = {
-        ...process.env,
+        ...paperFetchEnvironment(paperFetch),
         ELECTRON_RUN_AS_NODE: '1',
         LITROOT_SESSION_TOKEN: token,
         LITROOT_RUNTIME_LABEL: localRuntimeLabel(),

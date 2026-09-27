@@ -3,7 +3,7 @@ import type { DependencyReport } from '../shared/contracts.js'
 import { dependencyRepair } from '../shared/dependency-repair.js'
 import { LitRootError } from './errors.js'
 import { supportedNode } from '../shared/node-version.js'
-import { paperFetchCommandFromEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
+import { paperFetchCommandFromEnvironment, paperFetchEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
 
 interface CommandResult {
   ok: boolean
@@ -11,9 +11,11 @@ interface CommandResult {
   reason: string | null
 }
 
-function command(executable: string, args: string[]): Promise<CommandResult> {
+function command(paperFetch: PaperFetchCommand, args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(executable, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(paperFetch.executable, [...paperFetch.prefixArgs, ...args], {
+      env: paperFetchEnvironment(paperFetch), shell: false, stdio: ['ignore', 'pipe', 'pipe']
+    })
     let output = ''
     let error = ''
     child.stdout.setEncoding('utf8')
@@ -37,12 +39,43 @@ function command(executable: string, args: string[]): Promise<CommandResult> {
   })
 }
 
+export const minimumPaperFetchVersion = '7.0.1'
+
+export function supportedPaperFetchVersion(output: string): boolean {
+  const match = /^paper-fetch (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(output.trim())
+  if (!match) return false
+  const [major, minor, patch] = match.slice(1).map(Number) as [number, number, number]
+  if (![major, minor, patch].every(Number.isSafeInteger)) return false
+  return major > 7 || (major === 7 && (minor > 0 || patch >= 1))
+}
+
+async function compatibility(paperFetch: PaperFetchCommand): Promise<{ version: string | null; reason: string | null }> {
+  const version = await command(paperFetch, ['--version'])
+  const required = `请升级 paper-fetch：LitRoot 要求 ${minimumPaperFetchVersion} 或更高正式版本，并支持 --progress jsonl 和 --control-stdin。`
+  if (!version.ok || !supportedPaperFetchVersion(version.output)) {
+    return { version: version.ok ? version.output : null, reason: `${required} 检测结果：${version.reason ?? version.output}` }
+  }
+  const help = await command(paperFetch, ['fetch', '--help'])
+  const supported = help.ok && /--progress\b[\s\S]*?\bjsonl\b/.test(help.output) && /--control-stdin\b/.test(help.output)
+  return { version: version.output, reason: supported ? null : `${required}${help.reason ? ` ${help.reason}` : ''}` }
+}
+
 export async function requirePaperFetchProgress(paperFetch: PaperFetchCommand): Promise<void> {
-  const result = await command(paperFetch.executable, [...paperFetch.prefixArgs, 'fetch', '--help'])
-  if (!result.ok || !/--progress\b/.test(result.output) || !/--control-stdin\b/.test(result.output)) {
-    throw new LitRootError('paper_fetch_upgrade_required',
-      '请升级 paper-fetch：LitRoot 要求支持 --progress jsonl 和 --control-stdin 的版本。' +
-      (result.reason ? ` ${result.reason}` : ''), 409)
+  const result = await compatibility(paperFetch)
+  if (result.reason) throw new LitRootError('paper_fetch_upgrade_required', result.reason, 409)
+}
+
+/** Help lookup is advisory: a missing auth capability must never block archival. */
+export async function paperFetchAuthCommand(paperFetch: PaperFetchCommand, provider: string): Promise<string | null> {
+  if (!/^[a-z][a-z0-9_]*$/.test(provider)) return null
+  try {
+    const result = await command(paperFetch, ['auth', '--help'])
+    if (!result.ok) return null
+    const positional = result.output.split(/positional arguments:/i)[1]?.split(/options:|optional arguments:/i)[0]
+    const choices = positional?.match(/\{([a-z0-9_,\s]+)\}/)?.[1]?.split(',').map((value) => value.trim()) ?? []
+    return choices.includes(provider) ? `paper-fetch auth ${provider}` : null
+  } catch {
+    return null
   }
 }
 
@@ -50,11 +83,7 @@ export async function diagnoseEnvironment(
   runtimeLabel = process.env.LITROOT_RUNTIME_LABEL || '本机'
 ): Promise<DependencyReport> {
   const paperFetch = paperFetchCommandFromEnvironment()
-  const paperFetchResult = await command(
-    paperFetch.executable,
-    [...paperFetch.prefixArgs, '--version']
-  )
-  const protocolReason = await requirePaperFetchProgress(paperFetch).then(() => null, (error: Error) => error.message)
+  const paperFetchResult = await compatibility(paperFetch)
   const nodeVersion = process.version
   const checks: DependencyReport['checks'] = [
     {
@@ -67,11 +96,11 @@ export async function diagnoseEnvironment(
     },
     {
       name: 'paper-fetch',
-      ok: paperFetchResult.ok && protocolReason === null,
-      version: paperFetchResult.ok ? paperFetchResult.output.split(/\r?\n/, 1)[0] ?? null : null,
-      required: '可执行的官方 paper-fetch',
+      ok: paperFetchResult.reason === null,
+      version: paperFetchResult.version,
+      required: `${minimumPaperFetchVersion}+ 正式版本；--progress jsonl / --control-stdin`,
       repairCommand: dependencyRepair.paperFetch,
-      reason: paperFetchResult.reason ?? protocolReason
+      reason: paperFetchResult.reason
     }
   ]
   return { runtimeLabel, ready: checks.every((check) => check.ok), checks }

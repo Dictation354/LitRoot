@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG_CN.md)
 
+## Unreleased
+
+- Require paper-fetch 7.0.1+ stable and JSONL progress/control support before creating or resuming tasks.
+- Preserve official Windows installer configuration with user overrides taking precedence.
+- Retain source/acquisition and acceptance diagnostics, preserve failure/fallback causes, and provide supported manual auth commands as a separate field.
+- Distinguish unscheduled batch items from cancellations and persist completion order from actual terminal events across recovery.
+- Add genuine 7.0.1 contract fixtures and optional offline CLI integration; older task records remain readable.
+
 ## [1.1.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.1.3) — 2026-09-13
 
 ### Fixed

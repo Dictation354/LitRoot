@@ -3,8 +3,10 @@ import type {
   AcceptanceOverall,
   ContentKind,
   FetchItem,
+  FetchDiagnostics,
   IdentityCandidate
 } from '../shared/contracts.js'
+import { supportedPaperFetchVersion } from './diagnostics.js'
 import { doiFromInput, normalizeDoi } from './identity.js'
 
 type UnknownRecord = Record<string, unknown>
@@ -17,6 +19,8 @@ export interface ParsedTerminalRecord {
   canonicalUrl: string | null
   title: string | null
   provider: string | null
+  source: string | null
+  diagnostics: FetchDiagnostics | null
   reason: string | null
   errorCode: string | null
   candidates: IdentityCandidate[]
@@ -75,7 +79,8 @@ function candidates(value: unknown): IdentityCandidate[] {
 
 export function parseTerminalRecord(
   value: unknown,
-  fallbackIndex = 1
+  fallbackIndex = 1,
+  batch = false
 ): ParsedTerminalRecord | null {
   if (!isRecord(value)) return null
   const acceptanceRecord = nested(value, 'acceptance')
@@ -88,13 +93,54 @@ export function parseTerminalRecord(
     (item) => isRecord(item) && /markdown/i.test(String(item.kind))
   )
   const artifact = isRecord(markdownArtifact) ? markdownArtifact : {}
-  const status = text(value.status) ?? text(errorRecord.status) ?? (
+  let status = text(value.status) ?? text(errorRecord.status) ?? (
     value.record_status === 'completed' ? 'ok' : text(value.record_status) ?? 'unknown'
   )
+  const errorStatus = text(errorRecord.status)
+  const errorCode = text(errorRecord.code) ?? (
+    errorStatus && !['ok', 'success', 'complete', 'completed', 'error', 'failed', 'aborted', 'unknown'].includes(errorStatus)
+      ? errorStatus : null
+  ) ?? text(errorRecord.error_category ?? value.code ?? value.error_category)
+  if (value.record_status === 'aborted' || status === 'aborted') {
+    status = errorCode === 'request_cancelled' ? 'cancelled' : (
+      batch && value.schema_version === 2 && supportedPaperFetchVersion(`paper-fetch ${String(value.tool_version)}`) &&
+      errorStatus === 'aborted' && text(errorRecord.code) && !['unknown', 'aborted'].includes(String(errorRecord.code)) && text(errorRecord.reason) &&
+      text(value.started_at) !== null && value.started_at === value.completed_at
+        ? 'not_scheduled' : 'failed'
+    )
+  }
+  const provenance = nested(acceptanceRecord, 'provenance')
+  const object = (entry: unknown): UnknownRecord | null => isRecord(entry) ? entry : null
+  const codes = (...entries: unknown[]): string[] => [...new Set(entries.flatMap((entry) => (
+    Array.isArray(entry) ? entry.flatMap((code) => text(code) ? [text(code)!] : []) : []
+  )))]
+  const diagnostics: FetchDiagnostics | null = [
+    'acceptance', 'acquisition', 'trace', 'failure_codes', 'fallback_codes', 'warning_codes', 'error'
+  ].some((key) => value[key] != null) ? {
+    acquisition: object(value.acquisition) ?? object(provenance.acquisition),
+    acceptance: {
+      overall: acceptance(acceptanceRecord.overall),
+      identity: object(acceptanceRecord.identity), fetch: object(acceptanceRecord.fetch),
+      content: object(acceptanceRecord.content), asset: object(acceptanceRecord.asset),
+      output: object(acceptanceRecord.output), provenance: object(acceptanceRecord.provenance)
+    },
+    failureCodes: codes(value.failure_codes, provenance.failure_codes),
+    fallbackCodes: codes(value.fallback_codes, provenance.fallback_codes),
+    warningCodes: codes(value.warning_codes, provenance.warning_codes),
+    retryAfterSeconds: typeof errorRecord.retry_after_seconds === 'number' &&
+      Number.isFinite(errorRecord.retry_after_seconds) && errorRecord.retry_after_seconds >= 0
+      ? errorRecord.retry_after_seconds : null,
+    semanticLosses: object(value.semantic_losses),
+    assetSummary: object(value.asset_summary) ?? object(acceptanceRecord.asset),
+    trace: Array.isArray(value.trace) ? value.trace.filter(isRecord).map((event) => ({
+      stage: text(event.stage), code: text(event.code)
+    })) : []
+  } : null
+  const diagnosticCodes = diagnostics ? codes(diagnostics.failureCodes, diagnostics.fallbackCodes, diagnostics.warningCodes) : []
   return {
     index: integer(value.index, fallbackIndex),
     attempt: integer(value.attempt, 1),
-    status: status === 'aborted' ? 'cancelled' : status,
+    status,
     canonicalDoi: normalizeDoi(
       value.doi ?? value.canonical_doi ?? identityRecord.doi ?? identityRecord.canonical_doi
     ),
@@ -103,9 +149,15 @@ export function parseTerminalRecord(
       identityRecord.canonical_landing_url
     ),
     title: text(value.title ?? identityRecord.title),
-    provider: text(value.provider ?? value.source ?? nested(value, 'metadata').provider),
-    reason: text(errorRecord.reason ?? value.reason ?? value.message),
-    errorCode: text(errorRecord.code ?? errorRecord.error_category ?? value.code ?? value.error_category),
+    provider: text(errorRecord.provider) ?? text(diagnostics?.acquisition?.provider) ??
+      text(value.provider) ?? text(nested(value, 'metadata').provider),
+    source: text(value.source) ?? text(provenance.source),
+    diagnostics,
+    reason: text(errorRecord.reason ?? value.reason ?? value.message) ?? (
+      acceptanceRecord.overall === 'degraded' && diagnosticCodes.length > 0
+        ? `上游降级原因：${diagnosticCodes.join('、')}` : null
+    ),
+    errorCode,
     candidates: candidates(value.candidates ?? errorRecord.candidates),
     acceptance: acceptance(acceptanceRecord.overall ?? value.overall),
     contentKind: contentKind(
@@ -117,9 +169,7 @@ export function parseTerminalRecord(
     outputSha256: text(
       value.output_sha256 ?? value.sha256 ?? outputRecord.sha256 ?? artifact.sha256
     ),
-    completionOrder: value.completion_order === undefined
-      ? null
-      : integer(value.completion_order, fallbackIndex),
+    completionOrder: null,
     raw: value
   }
 }
@@ -160,6 +210,9 @@ export function itemFor(index: number, query: string): FetchItem {
     canonicalUrl: null,
     title: null,
     provider: null,
+    source: null,
+    diagnostics: null,
+    authCommand: null,
     reason: null,
     errorCode: null,
     candidates: [],
@@ -173,10 +226,13 @@ export function itemFor(index: number, query: string): FetchItem {
 }
 
 export function actionRequired(record: ParsedTerminalRecord): boolean {
+  if (record.status === 'failed' && [
+    record.raw.record_status, record.raw.status, nested(record.raw, 'error').status
+  ].includes('aborted')) return false
   return (
     record.acceptance === 'action_required' ||
-    ['ambiguous', 'no_access', 'auth_required', 'challenge', 'multiple_candidates'].includes(record.status) ||
-    ['manual_auth', 'lawful_access_boundary'].includes(record.errorCode ?? '')
+    ['ambiguous', 'no_access', 'auth_required', 'challenge', 'multiple_candidates', 'rate_limited'].includes(record.status) ||
+    ['manual_auth', 'lawful_access_boundary', 'auth_required', 'no_access', 'challenge', 'rate_limited'].includes(record.errorCode ?? '')
   )
 }
 
@@ -186,10 +242,18 @@ export function projectRecord(item: FetchItem, record: ParsedTerminalRecord): vo
   item.canonicalUrl = record.canonicalUrl
   item.title = record.title
   item.provider = record.provider
+  item.source = record.source
+  item.diagnostics = record.diagnostics
+  item.authCommand = null
   item.reason = record.reason
   item.errorCode = record.errorCode
   item.candidates = record.candidates
   item.acceptance = record.acceptance
   item.contentKind = record.contentKind
-  item.completionOrder = record.completionOrder
+}
+
+export function authenticationRequired(record: ParsedTerminalRecord): boolean {
+  return [record.status, record.errorCode].some((value) => (
+    ['no_access', 'auth_required', 'challenge', 'manual_auth'].includes(value ?? '')
+  ))
 }

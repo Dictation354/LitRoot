@@ -6,7 +6,7 @@ This checklist requires a real x64 Windows 11 machine and is intentionally separ
 
 1. If an older NSIS build is installed, uninstall it manually. The Inno Setup installer does not detect, remove, or migrate NSIS installations.
 2. Install the unsigned Inno Setup build from `release/` on Windows 11 without silent flags.
-3. Install the official Windows x64 `paper-fetch` package, then prepare a WSL2 distribution with Node.js 24.15+ and official `paper-fetch`. Keep WSL Node and paper-fetch visible through the login-shell configuration; do not add test-only shims.
+3. Install the official Windows x64 `paper-fetch` 7.0.1 or later stable package, then prepare a WSL2 distribution with Node.js 24.15+ and official `paper-fetch` 7.0.1 or later stable. Keep WSL Node and paper-fetch visible through the login-shell configuration; do not add test-only shims.
 4. Create one empty native NTFS project directory and one WSL-native directory under `/home/...`; do not place the WSL project under `/mnt/c`.
 
 ## Required evidence
@@ -31,3 +31,14 @@ This checklist requires a real x64 Windows 11 machine and is intentionally separ
 - Uninstall LitRoot and verify the Start Menu and optional desktop shortcuts are removed and `LitRoot.exe` no longer exists in the selected destination.
 
 Record the Windows build number, WSL version/distribution, bundled and WSL Node versions, both paper-fetch versions, installer SHA-256, and pass/fail evidence for every item.
+
+## 7.0.1 configuration and task semantics
+
+- Install paper-fetch under a path containing spaces. Launch LitRoot from the desktop with `PAPER_FETCH_ENV_FILE` absent, then empty; confirm installer `offline.env` configuration reaches both dependency checks and fetching.
+- Set a nonempty custom `PAPER_FETCH_ENV_FILE`, relaunch and confirm it overrides the installer default. Repeat with a direct `.exe` entry and confirm no Windows installation directory is inferred.
+- Select 7.0.0, an unrecognized/prerelease version, and an entry missing JSONL progress/control capability. Check upgrade guidance before create/resume, unchanged historical task records after rejection, and continued access to papers and history.
+- With a compatible engine, check manual authentication guidance for a supported provider, an unsupported provider, and unavailable `auth --help`. Copy must contain only the command; no login runs automatically.
+- Inspect browser failure, successful fallback, abstract-only output, and provider rate limiting. Verify original failure codes, preserved degradation reasons, and separate unscheduled/cancelled counts.
+- Cancel one item and an entire batch, then resume. Confirm successful archives remain unchanged, completion numbers continue monotonically, and missing terminal events leave completion numbers empty.
+
+2026-09-27 implementation verification: automated command/configuration tests and Linux offline CLI integration are recorded in the compatibility audit. Native Windows/macOS, real browser login and publisher network retrieval remain **unverified**; this checklist is not evidence that those checks passed.

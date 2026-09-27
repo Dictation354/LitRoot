@@ -61,7 +61,7 @@ describe('paper-fetch task orchestration', () => {
       'complete', 'limited', 'action_required', 'action_required', 'failed'
     ])
     expect(run.items[0]?.completionOrder).toBe(5)
-    expect(run.items[3]?.reason).toContain('paper-fetch auth fakepaywall')
+    expect(run.items[3]?.authCommand).toBe('paper-fetch auth wiley')
     expect(project.search({ projectId: project.layout.id, query: 'Fetched' }).total).toBe(2)
     const args = JSON.parse(await readFile(argsLog, 'utf8')) as string[]
     expect(args).toContain('--query-file')
@@ -431,4 +431,75 @@ describe('paper-fetch task orchestration', () => {
     await project.close()
   })
 
+})
+
+it.each(['7.0.0', '7.0.1-rc.1', 'invalid'])('rejects version %s without creating or resetting tasks', async (version) => {
+  const { project, executable } = await fixture()
+  try {
+    const created = await project.fetch.create({ projectId: project.layout.id, inputs: ['failed paper'] })
+    const before = await terminal(project, created.id)
+    await writeFile(executable, (await readFile(executable, 'utf8')).replace('paper-fetch 7.0.1', `paper-fetch ${version}`))
+    await expect(project.fetch.create({ projectId: project.layout.id, inputs: ['new paper'] })).rejects.toMatchObject({ code: 'paper_fetch_upgrade_required' })
+    await expect(project.fetch.resume(created.id)).rejects.toMatchObject({ code: 'paper_fetch_upgrade_required' })
+    expect(project.fetch.list()).toEqual([before])
+    expect(JSON.parse(await readFile(before.manifestPath, 'utf8'))).toEqual(before)
+  } finally { await project.close() }
+})
+
+it('keeps completion counters across recovery and leaves reconciled results unordered', async () => {
+  const { project, executable } = await fixture()
+  const created = await project.fetch.create({ projectId: project.layout.id, inputs: ['missing event', 'retry paper', 'protocol noise'] })
+  const first = await terminal(project, created.id)
+  expect(first.items.map((item) => item.completionOrder)).toEqual([null, 2, 1])
+  expect(first.completionCounter).toBe(2)
+  await project.close()
+  // Simulate an old app manifest with no new fields. Never infer diagnostics for it.
+  const stored = JSON.parse(await readFile(first.manifestPath, 'utf8'))
+  delete stored.completionCounter
+  for (const item of stored.items) {
+    delete item.diagnostics
+    delete item.authCommand
+    delete item.source
+  }
+  await writeFile(first.manifestPath, JSON.stringify(stored))
+  const reopened = new LitRootProject(project.layout, new ServiceEventBus(), executable)
+  try {
+    await reopened.start()
+    expect(reopened.fetch.get(created.id).completionCounter).toBe(2)
+    expect(reopened.fetch.get(created.id).items[0]).toMatchObject({ source: null, authCommand: null, diagnostics: null })
+    await reopened.fetch.resume(created.id)
+    const finished = await terminal(reopened, created.id)
+    expect(finished.items.map((item) => item.completionOrder)).toEqual([null, 3, 1])
+    expect(finished.completionCounter).toBe(3)
+  } finally { await reopened.close() }
+})
+
+it('treats auth help failure as advisory and clears old diagnostics on retry', async () => {
+  const { project, executable } = await fixture()
+  try {
+    await writeFile(executable, (await readFile(executable, 'utf8')).replace("console.log('positional arguments: {wiley,science}'); process.exit(0)", 'process.exit(1)'))
+    const created = await project.fetch.create({ projectId: project.layout.id, inputs: ['auth paper', 'complete paper'] })
+    const first = await terminal(project, created.id)
+    expect(first.items[0]).toMatchObject({ state: 'action_required', provider: 'wiley', authCommand: null })
+    expect(first.items[1]?.state).toBe('complete')
+    const retry = await project.fetch.resume(created.id)
+    expect(retry.items[0]).toMatchObject({ diagnostics: null, source: null, provider: null, authCommand: null })
+    expect(retry.items[1]).toEqual(first.items[1])
+    await terminal(project, created.id)
+  } finally { await project.close() }
+})
+
+it('uses the same installer configuration for compatibility checks and fetch', async () => {
+  const { project, executable } = await fixture()
+  await project.close()
+  const script = await readFile(executable, 'utf8')
+  await writeFile(executable, script.replace('const args = process.argv.slice(2)', "if (process.env.LITROOT_TEST_CONFIG !== 'installer config with spaces') process.exit(2)\nconst args = process.argv.slice(2)"))
+  const reopened = new LitRootProject(project.layout, new ServiceEventBus(), {
+    executable, prefixArgs: [], envDefaults: { LITROOT_TEST_CONFIG: 'installer config with spaces' }
+  })
+  try {
+    await reopened.start()
+    const created = await reopened.fetch.create({ projectId: project.layout.id, inputs: ['complete paper'] })
+    expect((await terminal(reopened, created.id)).items[0]?.state).toBe('complete')
+  } finally { await reopened.close() }
 })

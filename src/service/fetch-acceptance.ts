@@ -48,16 +48,18 @@ export class FetchAcceptance {
       item.reason = record.reason ?? '任务已取消。'
       return
     }
+    if (record.status === 'not_scheduled') {
+      item.state = 'not_scheduled'
+      return
+    }
     if (actionRequired(record)) {
       item.acceptance = 'action_required'
       item.state = 'action_required'
-      if (record.provider && ['no_access', 'auth_required', 'challenge'].includes(record.status)) {
-        item.reason = `${record.reason ?? '需要人工认证或合法访问权限。'}\n人工命令：paper-fetch auth ${record.provider}`
-      }
       return
     }
 
-    if (!record.acceptance && !['ok', 'success', 'complete'].includes(record.status)) {
+    if (record.acceptance === 'failed' || record.raw.record_status === 'failed' ||
+      !['ok', 'success', 'complete', 'completed'].includes(record.status)) {
       item.acceptance = 'failed'
       item.state = 'failed'
       item.reason = record.reason ?? `paper-fetch 返回状态 ${record.status}。`
@@ -234,7 +236,7 @@ export class FetchAcceptance {
     item.state = overall
     const unavailableAssets = missingAssets.length + parsed.paper.remoteAssetSources.length
     item.reason = unavailableAssets > 0
-      ? `正文已保存，但 ${unavailableAssets} 个图片资产缺失、越界或为远程资源，已阻止加载。`
+      ? [record.reason, `正文已保存，但 ${unavailableAssets} 个图片资产缺失、越界或为远程资源，已阻止加载。`].filter(Boolean).join('\n')
       : record.reason
   }
 

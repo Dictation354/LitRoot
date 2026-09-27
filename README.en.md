@@ -68,7 +68,11 @@ New results first land in `.litroot/tmp/`. Identity, trusted front matter, conte
 
 Single and batch fetches and refreshes show stages, elapsed stage time, and asset counts for the current source/pass. Each result is validated and archived as soon as its terminal event arrives. Item cancellation first shows “cancelling” and becomes “cancelled” after engine confirmation; other inputs continue. Results already entering archival finish that transaction. Cancelled refreshes preserve existing full text, and cancelled partial output stays in staging until an explicit resume.
 
-Dependency diagnostics and create/resume check for `--progress` and `--control-stdin`. Engines lacking these interfaces must be upgraded.
+LitRoot requires **paper-fetch 7.0.1 or a later stable release**, with `--progress jsonl` and `--control-stdin`. Diagnostics and create/resume use the same check. Older, unrecognized, prerelease or capability-incomplete engines receive an upgrade message before any task is created or reset. Existing papers and historical tasks remain readable.
+
+When converting the official Windows `.cmd` launcher to its Python entry point, LitRoot supplies the installation’s `offline.env` as the default `PAPER_FETCH_ENV_FILE`. A nonempty user setting takes precedence; diagnostics and fetching share the environment. Native `.exe`, Linux/macOS and WSL entries do not infer a Windows installation path.
+
+Task details retain source, acquisition route, error codes, fallback reasons and asset/content quality summaries. A copyable manual authentication command appears only for providers declared by the engine; LitRoot never logs in automatically. Unscheduled items caused by rate limits or batch stops are counted separately from cancellations and can be retried with unfinished items. Successfully archived items remain intact.
 
 ## Security boundary
 

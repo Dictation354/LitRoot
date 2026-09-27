@@ -1,6 +1,7 @@
 export interface PaperFetchCommand {
   executable: string
   prefixArgs: string[]
+  envDefaults?: Record<string, string>
 }
 
 export function paperFetchCommandFromEnvironment(): PaperFetchCommand {
@@ -27,4 +28,16 @@ export function normalizePaperFetchCommand(
 ): PaperFetchCommand {
   if (typeof command === 'string') return { executable: command, prefixArgs: [] }
   return command ?? paperFetchCommandFromEnvironment()
+}
+
+/** Nonempty inherited settings always win over installer defaults. */
+export function paperFetchEnvironment(
+  command: PaperFetchCommand,
+  inherited: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const env = { ...inherited }
+  for (const [key, value] of Object.entries(command.envDefaults ?? {})) {
+    if (!env[key]?.trim()) env[key] = value
+  }
+  return env
 }

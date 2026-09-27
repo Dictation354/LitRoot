@@ -111,7 +111,7 @@ describe('service runtime startup', () => {
 
 describe('Windows paper-fetch command resolution', () => {
   it('uses the official installer Python without executing the cmd shim', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'litroot-paper-fetch-'))
+    const root = await mkdtemp(join(tmpdir(), 'litroot paper fetch-'))
     try {
       await mkdir(join(root, 'bin'))
       await mkdir(join(root, 'runtime'))
@@ -119,7 +119,8 @@ describe('Windows paper-fetch command resolution', () => {
       await writeFile(join(root, 'runtime', 'python.exe'), '')
       await expect(windowsPaperFetchCommand(join(root, 'bin', 'paper-fetch.cmd'))).resolves.toEqual({
         executable: join(root, 'runtime', 'python.exe'),
-        prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli']
+        prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli'],
+        envDefaults: { PAPER_FETCH_ENV_FILE: join(root, 'offline.env') }
       })
     } finally {
       await rm(root, { recursive: true, force: true })

@@ -54,6 +54,7 @@ function run(id: string, projectId: string, createdAt: string): FetchRun {
     finishedAt: createdAt,
     manifestPath: `/runs/${id}.json`,
     executionIndexes: [],
+    completionCounter: 0,
     items: []
   }
 }
@@ -394,4 +395,27 @@ it('reports resume failure and ignores an action response after changing project
   await act(async () => response.resolve(firstRun))
   expect(container.querySelector<HTMLSelectElement>('.run-select select')?.value).toBe(secondRun.id)
   expect(container.textContent).not.toContain('Failed paper')
+})
+
+it('shows unscheduled counts and copies only the structured auth command', async () => {
+  const selectedProject = project('project_aaaaaaaaaaaaaaaaaaaaaaaa', 'Diagnostics')
+  const selected = run('run_cccccccccccccccccccccccc', selectedProject.id, '2026-09-02T02:00:00.000Z')
+  const unscheduled = { ...itemFor(1, 'Rate-limited paper'), stage: 'terminal' as const, state: 'not_scheduled' as const, reason: 'Provider lane stopped', errorCode: 'rate_limited' }
+  const auth = { ...itemFor(2, 'Auth paper'), stage: 'terminal' as const, state: 'action_required' as const, source: 'wiley_browser', provider: 'wiley', reason: 'Manual authentication required.', authCommand: 'paper-fetch auth wiley' }
+  selected.items = [unscheduled, auth]
+  const copyText = vi.fn(async () => undefined)
+  const resume = vi.fn(async () => selected)
+  window.litroot = transportFor({ fetch: { list: vi.fn(async () => [selected]), resume }, system: { copyText } } as unknown as LitRootBridge)
+  await act(async () => root.render(<AddPapersDialog open project={selectedProject} event={null} onClose={vi.fn()} onOpenPaper={vi.fn()} />))
+  await settle()
+  expect(container.textContent).toContain('未调度 1')
+  expect(container.textContent).not.toContain('已取消 1')
+  expect(container.textContent).toContain('来源：wiley_browser')
+  expect(container.textContent).toContain('错误码：rate_limited')
+  const copy = [...container.querySelectorAll('button')].find((button) => button.textContent === '复制人工命令')!
+  await act(async () => copy.click())
+  expect(copyText).toHaveBeenCalledWith('paper-fetch auth wiley')
+  const continueButton = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('继续未完成项'))!
+  await act(async () => continueButton.click())
+  expect(resume).toHaveBeenCalled()
 })

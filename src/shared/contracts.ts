@@ -245,6 +245,7 @@ export const fetchItemStateSchema = z.enum([
   'limited',
   'failed',
   'action_required',
+  'not_scheduled',
   'cancelled'
 ])
 
@@ -265,6 +266,28 @@ export const fetchAssetProgressSchema = z.object({
   }).refine((count) => count.failed <= count.completed && (count.total === null || count.completed <= count.total))).max(4)
 })
 
+const diagnosticObjectSchema = z.record(z.string(), z.unknown())
+export const fetchDiagnosticsSchema = z.object({
+  acquisition: diagnosticObjectSchema.nullable(),
+  acceptance: z.object({
+    overall: acceptanceOverallSchema.nullable(),
+    identity: diagnosticObjectSchema.nullable(),
+    fetch: diagnosticObjectSchema.nullable(),
+    content: diagnosticObjectSchema.nullable(),
+    asset: diagnosticObjectSchema.nullable(),
+    output: diagnosticObjectSchema.nullable(),
+    provenance: diagnosticObjectSchema.nullable()
+  }),
+  failureCodes: z.array(z.string()),
+  fallbackCodes: z.array(z.string()),
+  warningCodes: z.array(z.string()),
+  retryAfterSeconds: z.number().nonnegative().nullable(),
+  semanticLosses: diagnosticObjectSchema.nullable(),
+  assetSummary: diagnosticObjectSchema.nullable(),
+  trace: z.array(z.object({ stage: z.string().nullable(), code: z.string().nullable() }))
+})
+export type FetchDiagnostics = z.infer<typeof fetchDiagnosticsSchema>
+
 export const fetchItemSchema = z.object({
   index: z.number().int().positive(),
   query: z.string(),
@@ -277,6 +300,9 @@ export const fetchItemSchema = z.object({
   canonicalUrl: z.string().nullable(),
   title: z.string().nullable(),
   provider: z.string().nullable(),
+  source: z.string().nullable().default(null),
+  diagnostics: fetchDiagnosticsSchema.nullable().default(null),
+  authCommand: z.string().nullable().default(null),
   reason: z.string().nullable(),
   errorCode: z.string().nullable(),
   candidates: z.array(identityCandidateSchema),
@@ -311,6 +337,7 @@ export const fetchRunSchema = z.object({
   finishedAt: z.string().nullable(),
   manifestPath: z.string(),
   executionIndexes: z.array(z.number().int().positive()),
+  completionCounter: z.number().int().nonnegative().default(0),
   items: z.array(fetchItemSchema)
 })
 export type FetchRun = z.infer<typeof fetchRunSchema>
