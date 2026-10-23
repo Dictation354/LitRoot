@@ -2,6 +2,17 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.2.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.0) — 2026-10-23
+
+### Improved
+
+- Replace KaTeX with MathJax 4.1.3 for synchronous offline SVG rendering and assistive MathML, with bundled TeX, mhchem, and bbm fonts and expanded TeX extension support.
+- Share the formula engine with paper-fetch 7.2.0, with generated-source and SHA-256 consistency checks; verify compatibility through offline CLI integration and reader tests.
+- Isolate macros and diagnostics per document, and display failed formulas as source TeX with an error tooltip while continuing to render the remaining body.
+- Preserve Markdown formula delimiters and source TeX, adapt display styling and text search to MathJax, and remove unused KaTeX dependencies through a parser-preserving pnpm patch.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.1.4...v1.2.0)
+
 ## 1.1.4 — 2026-09-27
 
 - Require paper-fetch 7.0.1+ stable and JSONL progress/control support before creating or resuming tasks.

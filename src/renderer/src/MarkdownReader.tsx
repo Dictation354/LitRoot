@@ -2,11 +2,11 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown, { type Components, type UrlTransform } from 'react-markdown'
-import rehypeKatex from 'rehype-katex'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
+import { rehypeMathjax } from '../../shared/markdown-math.mjs'
 import { isSafeLocalImageSource, safeMarkdownLink } from '../../shared/markdown-security'
 import { bridge, errorMessage } from './bridge'
 import { useMenuFocus, type ReadingPosition } from './workspace-hooks'
@@ -216,7 +216,7 @@ const MarkdownBody = memo(function MarkdownBody({ projectId, paperId, title, mar
 
   return <ReactMarkdown
     remarkPlugins={[remarkGfm, remarkMath, remarkStandaloneMath, remarkInlineImages]}
-    rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+    rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeMathjax]}
     urlTransform={urlTransform} components={components}
   >{displayedMarkdown}</ReactMarkdown>
 })
@@ -231,7 +231,7 @@ export function findTextRanges(root: HTMLElement, query: string): Range[] {
   let node = walker.nextNode() as Text | null
   while (node) {
     const parent = node.parentElement
-    if (parent && !parent.closest('.katex-mathml, annotation, [hidden], script, style') &&
+    if (parent && !parent.closest('mjx-assistive-mml, annotation, [hidden], script, style') &&
       (!parent.closest('details:not([open])') || Boolean(parent.closest('summary')?.parentElement?.matches('details:not([open])')))) {
       const nextBlock = parent.closest('p, h1, h2, h3, h4, h5, h6, li, td, th, pre, blockquote, div, figcaption') ?? root
       if (nextBlock !== block || !groups.length) { groups.push([]); block = nextBlock }

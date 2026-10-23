@@ -7,7 +7,7 @@ LitRoot is a project-scoped, local literature manager for Markdown produced by p
 It deliberately provides only six capabilities:
 
 - edit core bibliographic metadata and run project-local FTS5 search with a year filter;
-- safely render paper-fetch Markdown, local body images, GFM tables, code, and KaTeX math;
+- safely render paper-fetch Markdown, local body images, GFM tables, code, and MathJax 4.1.3 math;
 - invoke the official `paper-fetch fetch` command for one paper or batches without a fixed item count limit;
 - register multiple projects while strictly scoping every browse, search, fetch, and note operation to the active project;
 - store project and per-paper notes as ordinary Markdown inside the project.
@@ -26,6 +26,12 @@ Prerequisites are diagnosed but never installed automatically:
 - Windows 11 x64, Linux x64, or macOS 15+ on Apple Silicon;
 - the official platform build of `paper-fetch` for native mode; Node.js is bundled with LitRoot;
 - WSL2 plus Node.js 24.15+ (24.x) and official `paper-fetch` inside the selected distribution for WSL mode.
+
+The shared `src/shared/markdown-math.mjs` engine synchronously renders local SVG and assistive MathML after HTML sanitization, without a CDN. MathJax, the TeX font, and the mhchem and bbm font extensions are pinned to 4.1.3. Macros and diagnostics are isolated per document; a failed formula displays its source TeX with an error tooltip while the remaining body renders. Markdown delimiters and source TeX are preserved, without formula-specific macro aliases.
+
+Preloaded TeX extensions are `base`, `ams`, `amscd`, `newcommand`, `configmacros`, `textmacros`, `boldsymbol`, `mathtools`, `mhchem`, `upgreek`, `unicode`, `bbox`, `braket`, `cancel`, `color`, `enclose`, `extpfeil`, `verb`, `cases`, `bbm`, and `textcomp`; `noerrors` and `noundefined` are disabled. A version-specific pnpm patch removes the unused KaTeX HTML exports and types from `micromark-extension-math@3.1.0`, and overrides remove its KaTeX dependencies. Its Markdown parser is unchanged.
+
+The standalone paper-fetch `scripts/review_markdown_math.mjs --modules-root /path/to/LitRoot` checker loads the same engine. The canonical engine lives in paper-fetch at `src/paper_fetch/resources/formula/mathjax_engine.mjs`; `python scripts/sync_mathjax_engine.py /path/to/LitRoot` generates this copy, with `--check` and a digest test preventing drift. The paper-fetch formula tools and offline bundle validate source TeX and try same-node MathML on failure. LitRoot renders the final LaTeX; old Markdown needs re-extraction from archived source to gain MathML fallback.
 
 ## Project layout
 

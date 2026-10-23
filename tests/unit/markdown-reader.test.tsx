@@ -180,7 +180,7 @@ describe('safe Markdown reader', () => {
     expect(html).toContain('远程或不安全图片已阻止')
   })
 
-  it('renders GFM tables, fenced code and KaTeX output', () => {
+  it('renders GFM tables, fenced code and MathJax SVG and assistive MathML', () => {
     const html = renderToStaticMarkup(
       <MarkdownReader
         projectId="project_aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -191,7 +191,12 @@ describe('safe Markdown reader', () => {
     )
     expect(html).toContain('<table>')
     expect(html).toContain('language-ts')
-    expect(html).toContain('class="katex"')
+    expect(html).toContain('<mjx-container')
+    expect(html).toContain('<svg')
+    expect(html).toContain('<path')
+    expect(html).toContain('<mjx-assistive-mml')
+    expect(html).toContain('<math')
+    expect(html).toContain('mjx-assistive-mml {')
   })
 
   it('renders a standalone formula in display mode while keeping prose math inline', () => {
@@ -211,8 +216,45 @@ describe('safe Markdown reader', () => {
         markdown={'The relation $E = mc^2$ remains inline.'}
       />
     )
-    expect(displayHtml).toContain('class="katex-display"')
-    expect(inlineHtml).not.toContain('class="katex-display"')
+    expect(displayHtml).toContain('display="true"')
+    expect(inlineHtml).not.toContain('display="true"')
+  })
+
+  it('keeps failed formulas local, preserves source TeX and isolates document macros', () => {
+    const render = (markdown: string) => renderToStaticMarkup(
+      <MarkdownReader projectId="p" paperId="one" title="Title" markdown={markdown} />
+    )
+    const html = render(String.raw`Before $\unknownFormula$ after $x^2$.
+
+$\newcommand{\localmacro}{x}\localmacro$
+
+$\localmacro$`)
+    const article = document.createElement('article')
+    article.innerHTML = html
+    expect(article.querySelectorAll('.mathjax-error')).toHaveLength(1)
+    expect(article.querySelector('.mathjax-error')?.textContent).toBe(String.raw`\unknownFormula`)
+    expect(article.querySelector('.mathjax-error')?.getAttribute('title')).toContain('Undefined control sequence')
+    expect(article.querySelectorAll('svg')).toHaveLength(3)
+    expect(article.textContent).toContain('Before')
+    expect(article.textContent).toContain('after')
+    expect(render(String.raw`$\localmacro$`)).toContain('mathjax-error')
+  })
+
+  it('renders inline, block, list and table formulas with their existing display rules', () => {
+    const html = renderToStaticMarkup(
+      <MarkdownReader projectId="p" paperId="one" title="Title" markdown={
+        'Inline $\\int x$.\n\n$$\n\\begin{split}x&=1\\end{split}\n$$\n\n' +
+        '1. item\n\n   $$\n   \\sum x\n   $$\n\n' +
+        '| Formula |\n| --- |\n| $\\lVert x\\rVert$ |\n\n$\\infty x$'
+      } />
+    )
+    const article = document.createElement('article')
+    article.innerHTML = html
+    expect(article.querySelectorAll('mjx-container')).toHaveLength(5)
+    expect(article.querySelectorAll('mjx-container[display="true"]')).toHaveLength(3)
+    expect(article.querySelectorAll('li mjx-container[display="true"]')).toHaveLength(1)
+    expect(article.querySelectorAll('td mjx-container:not([display])')).toHaveLength(1)
+    expect(article.querySelectorAll('.mathjax-error')).toHaveLength(0)
   })
 
   it('lays out image formulas according to their Markdown source line', () => {
@@ -273,7 +315,7 @@ describe('safe Markdown reader', () => {
 
 it('matches visible inline phrases and literal special characters without Unicode offset corruption', () => {
   const article = document.createElement('article')
-  article.innerHTML = '<p>Alpha <strong>bold</strong> <em>and</em> <a>linked</a> phrase. İX [a+b].</p><p>Next paragraph</p><span class="katex-mathml">duplicate</span><span class="katex-html">duplicate</span>'
+  article.innerHTML = '<p>Alpha <strong>bold</strong> <em>and</em> <a>linked</a> phrase. İX [a+b].</p><p>Next paragraph</p><mjx-assistive-mml><math><mi>duplicate</mi></math></mjx-assistive-mml><span>duplicate</span>'
   expect(findTextRanges(article, 'bold and linked').map((range) => range.toString())).toEqual(['bold and linked'])
   expect(findTextRanges(article, 'x').map((range) => range.toString())).toEqual(['X', 'x'])
   expect(findTextRanges(article, 'İx').map((range) => range.toString())).toEqual(['İX'])

@@ -3,3 +3,8 @@ allowBuilds:
 onlyBuiltDependencies:
   - electron
   - esbuild
+overrides:
+  'micromark-extension-math@3.1.0>katex': '-'
+  'micromark-extension-math@3.1.0>@types/katex': '-'
+patchedDependencies:
+  micromark-extension-math@3.1.0: patches/micromark-extension-math@3.1.0.patch

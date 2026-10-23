@@ -7,7 +7,7 @@ LitRoot 是一个以项目目录为事实来源、面向 paper-fetch Markdown �
 它只做六件事：
 
 - 编辑论文核心元数据，并在当前项目内执行 FTS5 全文搜索和年份筛选；
-- 安全渲染 paper-fetch Markdown、正文图片、GFM 表格、代码和 KaTeX 数学公式；
+- 安全渲染 paper-fetch Markdown、正文图片、GFM 表格、代码和 MathJax 4.1.3 数学公式；
 - 通过 GUI 单篇或批量调用官方 `paper-fetch fetch`，批量条目数量不设固定上限；
 - 注册多个项目，但浏览、搜索、抓取和笔记始终限定在当前项目；
 - 把项目总笔记和逐篇笔记直接保存为项目内 Markdown。
@@ -26,6 +26,12 @@ Electron 仅负责窗口、运行环境选择、安全 IPC 和受限图片协议
 - Windows 11 x64、Linux x64，或 macOS 15+ Apple Silicon；
 - 本机模式安装对应平台的官方 `paper-fetch`；Node.js 已由 LitRoot 内置；
 - WSL 模式需要 WSL2，并在所选发行版内安装 Node.js 24.15+（24.x）和官方 `paper-fetch`。
+
+公式由 `src/shared/markdown-math.mjs` 同步渲染：HTML 白名单清理后输出本地 SVG 和辅助 MathML，无需 CDN。引擎、TeX 字库、mhchem 和 bbm 字形扩展均固定为 4.1.3；每篇文档独立维护宏与错误。失败公式局部显示源 TeX 和错误提示，其余正文继续渲染。Markdown 定界规则与源 TeX 保持原样，不配置公式专用宏别名。
+
+预载 TeX 扩展为 `base`、`ams`、`amscd`、`newcommand`、`configmacros`、`textmacros`、`boldsymbol`、`mathtools`、`mhchem`、`upgreek`、`unicode`、`bbox`、`braket`、`cancel`、`color`、`enclose`、`extpfeil`、`verb`、`cases`、`bbm`、`textcomp`；不启用 `noerrors` 或 `noundefined`。pnpm 对 `micromark-extension-math@3.1.0` 应用固定补丁，仅移除未使用的 KaTeX HTML 导出及类型，通过 overrides 去除其 KaTeX 依赖，保留原 Markdown 解析实现。
+
+paper-fetch 的独立 `scripts/review_markdown_math.mjs --modules-root /path/to/LitRoot` 可加载此共享引擎。唯一引擎源码位于 paper-fetch 的 `src/paper_fetch/resources/formula/mathjax_engine.mjs`；通过 `python scripts/sync_mathjax_engine.py /path/to/LitRoot` 生成本仓库副本，`--check` 与摘要测试检查一致性。paper-fetch 的公式工具／离线包用同源引擎校验源 TeX，并在失败时尝试同节点 MathML；阅读器只渲染最终 LaTeX。旧 Markdown 需从存档源重新提取以获得 MathML 回退结果。
 
 ## 项目目录
 

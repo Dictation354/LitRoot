@@ -2,6 +2,17 @@
 
 [English](CHANGELOG.md)
 
+## [1.2.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.0) — 2026-10-23
+
+### 改进
+
+- 使用 MathJax 4.1.3 替代 KaTeX，同步离线渲染 SVG 和辅助 MathML，内置 TeX、mhchem、bbm 字库并扩展 TeX 命令支持。
+- 与 paper-fetch 7.2.0 共用公式引擎，通过生成源码和 SHA-256 摘要检查保持一致，并以离线 CLI 联调及阅读器测试验证兼容性。
+- 每篇文档独立维护宏与诊断；失败公式显示源 TeX 和错误提示，其余正文继续渲染。
+- 保留 Markdown 公式定界规则与源 TeX，适配 MathJax 显示样式和正文搜索，并通过保留解析器行为的 pnpm 补丁移除未使用的 KaTeX 依赖。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.1.4...v1.2.0)
+
 ## 1.1.4 — 2026-09-27
 
 - 新建/恢复任务前统一检查 paper-fetch 7.0.1+ 正式版本及 JSONL 进度/控制能力。

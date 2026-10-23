@@ -160,7 +160,8 @@ textarea { resize: vertical; line-height: 1.55; }
 .markdown-reader pre { overflow: auto; padding: 16px; border-radius: 7px; background: #252a26; color: #f2f1ec; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; line-height: 1.55; }
 .markdown-reader code:not(pre code) { padding: 2px 5px; border-radius: 4px; background: #e9e7e0; font-family: "Cascadia Code", Consolas, monospace; font-size: .85em; }
 .markdown-reader blockquote { margin-inline: 0; padding: 2px 0 2px 18px; border-left: 3px solid var(--green); color: #596057; }
-.markdown-reader .katex-display { overflow-x: auto; overflow-y: hidden; padding: 8px 0; }
+.markdown-reader mjx-container[jax="SVG"][display="true"] { display: block; overflow-x: auto; overflow-y: hidden; padding: 8px 0; }
+.markdown-reader .mathjax-error { color: var(--danger, #b91c1c); white-space: pre-wrap; }
 .blocked-image { display: block; margin: 16px 0; padding: 10px; border: 1px dashed #c7a99f; color: var(--terracotta); background: #fbefeb; font-family: Inter, sans-serif; font-size: 12px; }
 .render-error { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; color: var(--ink); }
 .render-error h1, .render-error h2 { margin: 9px 0 8px; font-family: Georgia, "Noto Serif SC", serif; font-weight: 500; }
