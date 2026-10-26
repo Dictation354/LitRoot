@@ -2,6 +2,15 @@
 
 [English](CHANGELOG.md)
 
+## [1.2.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.1) — 2026-10-26
+
+### 修复
+
+- 项目目录删除后仍可断开对应条目，同时清除服务端残留的注册记录，不再要求项目已加载。
+- 修复 Windows 的 PATH 中缺少 paper-fetch 时系统报错乱码的问题，改为清晰的安装和配置提示。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.2.0...v1.2.1)
+
 ## [1.2.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.0) — 2026-10-23
 
 ### 改进

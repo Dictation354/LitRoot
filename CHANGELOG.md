@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.2.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.1) — 2026-10-26
+
+### Fixed
+
+- Allow project entries to be disconnected after their directories have been deleted, and clear stale service registrations without requiring the project to be loaded.
+- Replace garbled Windows system errors when paper-fetch is missing from PATH with readable installation and configuration guidance.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.2.0...v1.2.1)
+
 ## [1.2.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.0) — 2026-10-23
 
 ### Improved
