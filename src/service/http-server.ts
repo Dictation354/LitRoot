@@ -156,7 +156,6 @@ export class LitRootHttpServer {
 
     if (path[0] !== 'projects') throw new LitRootError('not_found', '接口不存在。', 404)
     const selectedProjectId = projectId(path[1])
-    const project = this.registry.require(selectedProjectId)
 
     if (method === 'DELETE' && path.length === 2) {
       await this.registry.remove(selectedProjectId)
@@ -165,6 +164,7 @@ export class LitRootHttpServer {
       response.end()
       return
     }
+    const project = this.registry.require(selectedProjectId)
     if (method === 'POST' && path[2] === 'scan' && path.length === 3) {
       sendJson(response, 200, await project.scan())
       return

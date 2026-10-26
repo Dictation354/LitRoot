@@ -89,7 +89,9 @@ async function resolveLocalPaperFetch(): Promise<PaperFetchCommand> {
   if (process.platform === 'win32') {
     if (configured) return windowsPaperFetchCommand(configured)
     const located = await command('where.exe', ['paper-fetch'])
-    if (located.code !== 0) throw new Error(cleanWslOutput(located.stderr) || '找不到 paper-fetch。')
+    if (located.code !== 0) {
+      throw new Error('未在 PATH 中找到 paper-fetch。请从下方官方发布页安装，或将已有安装目录加入 PATH，然后重启 LitRoot。')
+    }
     const candidates = cleanWslOutput(located.stdout).split('\n').map((item) => item.trim()).filter(Boolean)
     const candidate = candidates.find((item) => /\.(?:exe|cmd)$/i.test(item))
     if (!candidate) throw new Error('找不到受支持的 paper-fetch Windows 入口。')

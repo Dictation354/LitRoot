@@ -110,6 +110,26 @@ describe('service runtime startup', () => {
 })
 
 describe('Windows paper-fetch command resolution', () => {
+  it('shows readable installation guidance when Windows cannot find paper-fetch', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'win32' })
+    vi.stubEnv('PAPER_FETCH_BIN', '')
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChildProcess()
+      queueMicrotask(() => {
+        // GBK-encoded Chinese from where.exe has already been decoded as UTF-8.
+        child.stderr.emit('data', Buffer.from([0xd5, 0xd2, 0xb2, 0xbb, 0xb5, 0xbd]).toString('utf8'))
+        child.emit('close', 1)
+      })
+      return child as unknown as ChildProcess
+    })
+
+    const report = await new ServiceRuntimeManager(() => undefined).diagnose(target)
+    const check = report.checks.find((item) => item.name === 'paper-fetch')
+    expect(check).toMatchObject({ ok: false, version: null })
+    expect(check?.reason).toBe('未在 PATH 中找到 paper-fetch。请从下方官方发布页安装，或将已有安装目录加入 PATH，然后重启 LitRoot。')
+    expect(check?.repairCommand).toBe('https://github.com/Dictation354/paper-fetch-skill/releases/latest')
+  })
+
   it('uses the official installer Python without executing the cmd shim', async () => {
     const root = await mkdtemp(join(tmpdir(), 'litroot paper fetch-'))
     try {

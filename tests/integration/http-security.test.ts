@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -14,6 +14,36 @@ afterEach(async () => {
 })
 
 describe('localhost service security', () => {
+  it('allows a project entry to be removed after its directory was deleted and the service restarted', async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), 'litroot-http-remove-'))
+    sandboxes.push(sandbox)
+    const projectPath = join(sandbox, 'project')
+    const registryPath = join(sandbox, 'registry.json')
+    await mkdir(projectPath)
+    const original = new ProjectRegistry(registryPath)
+    const project = await original.register(projectPath)
+    await original.close()
+    await rm(projectPath, { recursive: true, force: true })
+
+    const registry = new ProjectRegistry(registryPath)
+    await registry.start()
+    const token = 'a'.repeat(64)
+    const server = new LitRootHttpServer(registry, token)
+    try {
+      const port = await server.start()
+      const client = new LitRootServiceClient(`http://127.0.0.1:${port}`, token)
+      expect(await client.listProjects()).toEqual([])
+      await expect(client.scan(project.id)).rejects.toMatchObject({ code: 'project_not_found', status: 404 })
+
+      await expect(client.removeProject(project.id)).resolves.toBeUndefined()
+      expect(JSON.parse(await readFile(registryPath, 'utf8')).projects).toEqual([])
+      await expect(client.removeProject(project.id)).resolves.toBeUndefined()
+    } finally {
+      await server.close()
+      await registry.close()
+    }
+  })
+
   it('requires a session token on every endpoint and keeps APIs project-scoped', async () => {
     const sandbox = await mkdtemp(join(tmpdir(), 'litroot-http-'))
     sandboxes.push(sandbox)

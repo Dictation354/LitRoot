@@ -114,9 +114,10 @@ export class ProjectRegistry {
 
   async remove(projectId: string): Promise<void> {
     const project = this.projects.get(projectId)
-    if (!project) return
-    this.projects.delete(projectId)
-    await project.close()
+    if (project) {
+      this.projects.delete(projectId)
+      await project.close()
+    }
     await this.persist()
   }
 
