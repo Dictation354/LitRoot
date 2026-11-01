@@ -99,6 +99,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run package:linux
+      - name: Verify Debian desktop icons
+        run: |
+          icons=()
+          for size in 16 24 32 48 64 128 256 512; do
+            icons+=("./usr/share/icons/hicolor/${size}x${size}/apps/litroot.png")
+          done
+          dpkg-deb --fsys-tarfile release/*.deb | tar -tf - "${icons[@]}"
       - name: Verify packaged native service runtime
         run: pnpm run test:packaged-service -- release/linux-unpacked/litroot release/linux-unpacked/resources/service/litroot-service.cjs
       - name: Write SHA-256 checksums
