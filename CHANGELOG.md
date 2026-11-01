@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.2.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.2) — 2026-11-01
+
+### Fixed
+
+- Fix the missing Linux application icon after installing the deb package by providing standard-size icons for the hicolor theme, including 512×512.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.2.1...v1.2.2)
+
 ## [1.2.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.1) — 2026-10-26
 
 ### Fixed

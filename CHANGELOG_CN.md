@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md)
 
+## [1.2.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.2) — 2026-11-01
+
+### 修复
+
+- 为 Linux 提供包含 512×512 在内的标准尺寸图标，安装到 hicolor 主题的有效目录，修复 deb 安装后应用图标为空的问题。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.2.1...v1.2.2)
+
 ## [1.2.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.1) — 2026-10-26
 
 ### 修复

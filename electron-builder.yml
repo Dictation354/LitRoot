@@ -35,7 +35,7 @@ mac:
   artifactName: '${productName}-${version}-macos-${arch}-unsigned.${ext}'
 
 linux:
-  icon: resources/litroot-app-icon.png
+  icon: resources/linux
   category: Office
   maintainer: 'Dictation354 <Dictation354@users.noreply.github.com>'
   target:

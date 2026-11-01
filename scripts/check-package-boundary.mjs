@@ -57,7 +57,7 @@ for (const target of ['AppImage', 'deb']) {
     failures.push(`the Linux package must explicitly target x64 ${target}`)
   }
 }
-if (config.linux?.icon !== 'resources/litroot-app-icon.png') failures.push('the Linux package must use the LitRoot icon')
+if (config.linux?.icon !== 'resources/linux') failures.push('the Linux package must use the standard-size LitRoot icons')
 if (!String(config.linux?.maintainer ?? '').includes('@')) failures.push('the Debian package must declare a maintainer email')
 const macTargets = Array.isArray(config.mac?.target) ? config.mac.target : []
 if (!macTargets.some((entry) => entry?.target === 'dmg' && entry.arch?.includes('arm64'))) {
