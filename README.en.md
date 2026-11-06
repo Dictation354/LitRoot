@@ -25,7 +25,7 @@ Prerequisites are diagnosed but never installed automatically:
 
 - Windows 11 x64, Linux x64, or macOS 15+ on Apple Silicon;
 - the official platform build of `paper-fetch` for native mode; Node.js is bundled with LitRoot;
-- WSL2 plus Node.js 24.15+ (24.x) and official `paper-fetch` inside the selected distribution for WSL mode.
+- WSL2 plus Node.js 24.15+ (24.x) or 26.x, and official `paper-fetch` inside the selected distribution for WSL mode.
 
 The shared `src/shared/markdown-math.mjs` engine synchronously renders local SVG and assistive MathML after HTML sanitization, without a CDN. MathJax, the TeX font, and the mhchem and bbm font extensions are pinned to 4.1.3. Macros and diagnostics are isolated per document; a failed formula displays its source TeX with an error tooltip while the remaining body renders. Markdown delimiters and source TeX are preserved, without formula-specific macro aliases.
 
@@ -90,6 +90,8 @@ Task details retain source, acquisition route, error codes, fallback reasons and
 - Child processes use argument arrays with `shell=false`; the WSL login shell runs only the fixed `exec "$@"` program. The official Windows `paper-fetch.cmd` is resolved to its bundled Python module entry instead of sending user input through `cmd.exe`.
 
 ## Development
+
+Development and builds support Node.js 24.15+ (24.x) and 26.x; the default version is in [.node-version](.node-version).
 
 ```bash
 corepack enable

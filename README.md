@@ -25,7 +25,7 @@ Electron 仅负责窗口、运行环境选择、安全 IPC 和受限图片协议
 
 - Windows 11 x64、Linux x64，或 macOS 15+ Apple Silicon；
 - 本机模式安装对应平台的官方 `paper-fetch`；Node.js 已由 LitRoot 内置；
-- WSL 模式需要 WSL2，并在所选发行版内安装 Node.js 24.15+（24.x）和官方 `paper-fetch`。
+- WSL 模式需要 WSL2，并在所选发行版内安装 Node.js 24.15+（24.x）或 26.x，以及官方 `paper-fetch`。
 
 公式由 `src/shared/markdown-math.mjs` 同步渲染：HTML 白名单清理后输出本地 SVG 和辅助 MathML，无需 CDN。引擎、TeX 字库、mhchem 和 bbm 字形扩展均固定为 4.1.3；每篇文档独立维护宏与错误。失败公式局部显示源 TeX 和错误提示，其余正文继续渲染。Markdown 定界规则与源 TeX 保持原样，不配置公式专用宏别名。
 
@@ -98,7 +98,7 @@ pnpm run build
 pnpm dev
 ```
 
-Node 版本见 [.node-version](.node-version)。生成各平台安装包：
+开发与构建支持 Node.js 24.15+（24.x）和 26.x，默认版本见 [.node-version](.node-version)。生成各平台安装包：
 
 ```bash
 pnpm run package:win

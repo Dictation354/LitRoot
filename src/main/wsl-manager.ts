@@ -157,7 +157,7 @@ export class ServiceRuntimeManager {
       const checks: DependencyReport['checks'] = [
         {
           name: 'node', ok: nodeOk,
-          version: nodeVersion, required: 'LitRoot 内置 Node.js 24.15+',
+          version: nodeVersion, required: 'LitRoot 内置 Node.js 24.15+（24.x）或 26.x',
           repairCommand: '', reason: nodeOk ? null : '当前 LitRoot 内置 Node.js 版本不受支持。'
         },
         {
@@ -180,9 +180,9 @@ export class ServiceRuntimeManager {
     const nodeOk = node.code === 0 && supportedNode(nodeVersion)
     const checks: DependencyReport['checks'] = [
       {
-        name: 'node', ok: nodeOk, version: nodeVersion, required: '24.15+',
+        name: 'node', ok: nodeOk, version: nodeVersion, required: '24.15+（24.x）或 26.x',
         repairCommand: dependencyRepair.node,
-        reason: nodeOk ? null : cleanWslOutput(node.stderr) || '需要 Node.js 24.15+。'
+        reason: nodeOk ? null : cleanWslOutput(node.stderr) || '需要 Node.js 24.15+（24.x）或 26.x。'
       },
       {
         name: 'paper-fetch', ok: paperFetch.code === 0,

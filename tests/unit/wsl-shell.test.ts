@@ -50,14 +50,19 @@ describe('WSL diagnostic output', () => {
 
   it('finds a Node version after noisy shell startup output', () => {
     expect(nodeVersionFromOutput('shell startup message\nv24.17.0\n')).toBe('v24.17.0')
+    expect(nodeVersionFromOutput('shell startup message\nv26.13.0\n')).toBe('v26.13.0')
     expect(nodeVersionFromOutput('node is unavailable')).toBeNull()
   })
 
-  it('accepts only supported Node 24 releases', () => {
+  it('accepts supported Node 24 and 26 releases', () => {
     expect(supportedNode('v24.15.0')).toBe(true)
     expect(supportedNode('v24.17.0')).toBe(true)
+    expect(supportedNode('v26.0.0')).toBe(true)
+    expect(supportedNode('v26.13.0')).toBe(true)
+    expect(supportedNode('26.13.0')).toBe(true)
     expect(supportedNode('v24.14.9')).toBe(false)
     expect(supportedNode('v25.0.0')).toBe(false)
+    expect(supportedNode('v27.0.0')).toBe(false)
     expect(supportedNode(null)).toBe(false)
   })
 })

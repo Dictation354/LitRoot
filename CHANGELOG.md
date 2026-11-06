@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.2.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.3) — 2026-11-06
+
+### Improved
+
+- Support Node.js 26.x for development, builds, and WSL services alongside Node.js 24.15+ (24.x).
+- Update runtime diagnostics and documentation to reflect the supported Node.js versions.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.2.2...v1.2.3)
+
 ## [1.2.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.2) — 2026-11-01
 
 ### Fixed

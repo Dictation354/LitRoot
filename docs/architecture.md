@@ -12,7 +12,7 @@ Electron main on Windows / Linux / macOS
   ▼
 single-file service
   ├── native: Electron bundled Node
-  └── Windows WSL: Node 24 in selected distribution
+  └── Windows WSL: Node 24.15+ (24.x) or 26.x in selected distribution
   ├── one ProjectDatabase per project
   ├── papers/ scanner + watcher
   ├── YAML metadata sidecars

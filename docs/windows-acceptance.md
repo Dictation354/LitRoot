@@ -6,7 +6,7 @@ This checklist requires a real x64 Windows 11 machine and is intentionally separ
 
 1. If an older NSIS build is installed, uninstall it manually. The Inno Setup installer does not detect, remove, or migrate NSIS installations.
 2. Install the unsigned Inno Setup build from `release/` on Windows 11 without silent flags.
-3. Install the official Windows x64 `paper-fetch` 7.0.1 or later stable package, then prepare a WSL2 distribution with Node.js 24.15+ and official `paper-fetch` 7.0.1 or later stable. Keep WSL Node and paper-fetch visible through the login-shell configuration; do not add test-only shims.
+3. Install the official Windows x64 `paper-fetch` 7.0.1 or later stable package, then prepare a WSL2 distribution with Node.js 24.15+ (24.x) or 26.x and official `paper-fetch` 7.0.1 or later stable. Keep WSL Node and paper-fetch visible through the login-shell configuration; do not add test-only shims.
 4. Create one empty native NTFS project directory and one WSL-native directory under `/home/...`; do not place the WSL project under `/mnt/c`.
 
 ## Required evidence

@@ -90,9 +90,9 @@ export async function diagnoseEnvironment(
       name: 'node',
       ok: supportedNode(nodeVersion),
       version: nodeVersion,
-      required: '24.15+',
+      required: '24.15+（24.x）或 26.x',
       repairCommand: dependencyRepair.node,
-      reason: supportedNode(nodeVersion) ? null : 'LitRoot 服务要求 Node.js 24.15 或更高的 24.x 版本。'
+      reason: supportedNode(nodeVersion) ? null : 'LitRoot 服务要求 Node.js 24.15+（24.x）或 26.x。'
     },
     {
       name: 'paper-fetch',

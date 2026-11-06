@@ -2,6 +2,15 @@
 
 [English](CHANGELOG.md)
 
+## [1.2.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.3) — 2026-11-06
+
+### 改进
+
+- 开发、构建与 WSL 服务新增 Node.js 26.x 支持，同时保留 Node.js 24.15+（24.x）支持。
+- 同步更新运行环境诊断提示和文档中的 Node.js 版本要求。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.2.2...v1.2.3)
+
 ## [1.2.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.2) — 2026-11-01
 
 ### 修复
