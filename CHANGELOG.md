@@ -2,6 +2,16 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.2.4](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.4) — 2026-11-15
+
+### Fixed
+
+- Read paper-fetch publication years from `publication_dates`, preferring print, online, issued, then unspecified dates, with legacy field fallback.
+- Automatically refresh existing cached metadata while preserving paper IDs, Markdown, and user year overrides, including explicitly cleared years.
+- Add the real paper-fetch 7.6.2 golden fixture and regression coverage, alongside offline CLI integration coverage for paper-fetch 7.3.4.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.2.3...v1.2.4)
+
 ## [1.2.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.3) — 2026-11-06
 
 ### Improved

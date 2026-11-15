@@ -5,6 +5,9 @@ import { canonicalHttpUrl, normalizeDoi, sha256 } from './identity.js'
 
 type UnknownRecord = Record<string, unknown>
 
+// Bump when parsing changes require existing cached papers to be reindexed.
+export const PAPER_MARKDOWN_PARSE_VERSION = 2
+
 export interface ParsedPaperMarkdown {
   frontmatter: UnknownRecord
   body: string
@@ -44,13 +47,29 @@ function strings(value: unknown, splitScalar = false): string[] {
     : [valueString]
 }
 
-function inferYear(metadata: UnknownRecord): number | null {
-  const direct = metadata.year
-  if (typeof direct === 'number' && Number.isInteger(direct) && direct >= 1000 && direct <= 9999) {
-    return direct
+function yearFromValue(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value >= 1000 && value <= 9999 ? value : null
   }
-  const matched = scalar(direct || metadata.published || metadata.date).match(/(?:19|20)\d{2}/)?.[0]
+  const matched = scalar(value).match(/(?<!\d)[1-9]\d{3}(?!\d)/)?.[0]
   return matched ? Number(matched) : null
+}
+
+function inferYear(metadata: UnknownRecord): number | null {
+  const direct = yearFromValue(metadata.year)
+  if (direct !== null) return direct
+
+  if (Array.isArray(metadata.publication_dates)) {
+    for (const kind of ['print', 'online', 'issued', 'unspecified']) {
+      for (const entry of metadata.publication_dates) {
+        if (!isRecord(entry) || entry.kind !== kind) continue
+        const year = yearFromValue(entry.value)
+        if (year !== null) return year
+      }
+    }
+  }
+
+  return yearFromValue(metadata.published) ?? yearFromValue(metadata.date)
 }
 
 function abstractFromBody(body: string): string {

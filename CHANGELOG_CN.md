@@ -2,6 +2,16 @@
 
 [English](CHANGELOG.md)
 
+## [1.2.4](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.4) — 2026-11-15
+
+### 修复
+
+- 从 paper-fetch 的 `publication_dates` 读取出版年份，按印刷、在线、发行、未指定类型排序，并兼容旧版日期字段。
+- 自动更新已有缓存元数据，保留论文 ID、Markdown 和用户年份覆盖，包括显式清空年份。
+- 加入真实 paper-fetch 7.6.2 golden 样本与回归测试，同时纳入 paper-fetch 7.3.4 离线 CLI 集成测试。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.2.3...v1.2.4)
+
 ## [1.2.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.3) — 2026-11-06
 
 ### 改进

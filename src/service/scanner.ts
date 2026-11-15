@@ -3,7 +3,7 @@ import { extname, relative, resolve } from 'node:path'
 import type { ScanResult } from '../shared/contracts.js'
 import { paperIdFor, sha256 } from './identity.js'
 import { mergeMetadata, MetadataStore } from './metadata.js'
-import { fallbackMarkdownName, parsePaperMarkdown } from './paper-markdown.js'
+import { fallbackMarkdownName, PAPER_MARKDOWN_PARSE_VERSION, parsePaperMarkdown } from './paper-markdown.js'
 import type { ProjectDatabase } from './project-database.js'
 import type { ProjectLayout } from './project-layout.js'
 import { isPathInside, portableRelativePath } from './safe-fs.js'
@@ -125,7 +125,7 @@ export class ProjectScanner {
           }
         }
         const knownFingerprint = sha256(
-          `${raw}\0${JSON.stringify(knownStored?.overrides ?? {})}\0${candidate.addedAt ?? ''}`
+          `${PAPER_MARKDOWN_PARSE_VERSION}\0${raw}\0${JSON.stringify(knownStored?.overrides ?? {})}\0${candidate.addedAt ?? ''}`
         )
         if (this.database.fingerprint(candidate.relativePath) === knownFingerprint) {
           seen.add(candidate.relativePath)
@@ -186,7 +186,7 @@ export class ProjectScanner {
           id: paperId,
           relativePath: candidate.relativePath,
           filePath: candidate.path,
-          fingerprint: sha256(`${raw}\0${JSON.stringify(overrides)}\0${candidate.addedAt ?? ''}`),
+          fingerprint: sha256(`${PAPER_MARKDOWN_PARSE_VERSION}\0${raw}\0${JSON.stringify(overrides)}\0${candidate.addedAt ?? ''}`),
           rawMarkdown: raw,
           parsed: parsed.paper,
           overrides,
