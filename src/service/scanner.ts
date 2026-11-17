@@ -30,6 +30,7 @@ async function walkPapers(layout: ProjectLayout, signal?: AbortSignal): Promise<
       if (entry.isSymbolicLink()) continue
       const path = resolve(directory, entry.name)
       if (entry.isDirectory()) {
+        if (entry.name === '.paper-fetch-results') continue
         await visit(path)
         continue
       }

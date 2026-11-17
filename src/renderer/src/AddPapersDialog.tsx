@@ -34,6 +34,7 @@ const stateLabel: Record<FetchRun['items'][number]['state'], string> = {
 
 const stageLabel: Record<FetchRun['items'][number]['stage'], string> = {
   queued: '排队', identity: '身份解析', fetching: '正文获取', assets: '资产处理',
+  waiting_profile: '等待浏览器使用权', executing_browser: '浏览器执行', browser_finished: '浏览器执行结束',
   validating: '抓取验收', writing: '输出写入', acceptance: '验收归档', terminal: '已结束'
 }
 const runLabel: Record<FetchRun['state'], string> = { queued: '排队中', running: '进行中', cancelling: '取消中', completed: '已结束', cancelled: '已取消', interrupted: '已中断' }

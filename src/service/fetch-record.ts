@@ -83,8 +83,9 @@ export function parseTerminalRecord(
   batch = false
 ): ParsedTerminalRecord | null {
   if (!isRecord(value)) return null
+  const receipt = value.contract === 'paper-fetch/receipt' && value.schema_version === 1
   const acceptanceRecord = nested(value, 'acceptance')
-  const identityRecord = nested(acceptanceRecord, 'identity')
+  const identityRecord = receipt ? nested(value, 'identity') : nested(acceptanceRecord, 'identity')
   const contentRecord = nested(acceptanceRecord, 'content')
   const errorRecord = nested(value, 'error')
   const outputRecord = nested(value, 'output')
@@ -93,6 +94,9 @@ export function parseTerminalRecord(
     (item) => isRecord(item) && /markdown/i.test(String(item.kind))
   )
   const artifact = isRecord(markdownArtifact) ? markdownArtifact : {}
+  const receiptOutput = receipt && Array.isArray(value.output_paths)
+    ? value.output_paths.map(text).find((path) => path && /\.(?:md|markdown)$/i.test(path))
+    : null
   let status = text(value.status) ?? text(errorRecord.status) ?? (
     value.record_status === 'completed' ? 'ok' : text(value.record_status) ?? 'unknown'
   )
@@ -131,7 +135,8 @@ export function parseTerminalRecord(
       Number.isFinite(errorRecord.retry_after_seconds) && errorRecord.retry_after_seconds >= 0
       ? errorRecord.retry_after_seconds : null,
     semanticLosses: object(value.semantic_losses),
-    assetSummary: object(value.asset_summary) ?? object(acceptanceRecord.asset),
+    assetSummary: object(value.asset_summary) ?? object(acceptanceRecord.asset) ??
+      (receipt ? object(acceptanceRecord.asset_summary) : null),
     trace: Array.isArray(value.trace) ? value.trace.filter(isRecord).map((event) => ({
       stage: text(event.stage), code: text(event.code)
     })) : []
@@ -164,7 +169,8 @@ export function parseTerminalRecord(
       contentRecord.kind ?? contentRecord.content_kind ?? value.content_kind ?? contentRecord.status
     ),
     outputPath: text(
-      value.output_path ?? value.saved_markdown_path ?? outputRecord.path ?? artifact.path
+      value.output_path ?? value.saved_markdown_path ?? outputRecord.path ?? artifact.path ??
+      receiptOutput ?? (receipt ? value.body_path : null)
     ),
     outputSha256: text(
       value.output_sha256 ?? value.sha256 ?? outputRecord.sha256 ?? artifact.sha256

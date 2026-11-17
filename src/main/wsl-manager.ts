@@ -77,10 +77,17 @@ export async function windowsPaperFetchCommand(path: string): Promise<PaperFetch
     throw new Error('Windows 本机仅支持官方 paper-fetch 安装器或原生 .exe 入口。')
   }
   const python = join(root, 'runtime', 'python.exe')
+  const node = join(root, 'runtime', 'node', 'node.exe')
   await access(python)
+  const envDefaults: Record<string, string> = { PAPER_FETCH_ENV_FILE: join(root, 'offline.env') }
+  // Older supported installers configure the Playwright driver Node in offline.env.
+  if (await access(node).then(() => true, () => false)) {
+    envDefaults.MATHML_TO_LATEX_NODE_BIN = node
+    envDefaults.PLAYWRIGHT_NODEJS_PATH = node
+  }
   return {
     executable: python, prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli'],
-    envDefaults: { PAPER_FETCH_ENV_FILE: join(root, 'offline.env') }
+    envDefaults
   }
 }
 

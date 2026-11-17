@@ -21,6 +21,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 
 import { ServiceRuntimeManager, windowsPaperFetchCommand } from '../../src/main/wsl-manager.js'
+import { paperFetchEnvironment } from '../../src/service/paper-fetch-command.js'
 
 class FakeReadable extends EventEmitter {
   setEncoding(): this {
@@ -130,18 +131,36 @@ describe('Windows paper-fetch command resolution', () => {
     expect(check?.repairCommand).toBe('https://github.com/Dictation354/paper-fetch-skill/releases/latest')
   })
 
-  it('uses the official installer Python without executing the cmd shim', async () => {
+  it.each([true, false])('uses the official installer Python without executing the cmd shim (bundled Node=%s)', async (bundledNode) => {
     const root = await mkdtemp(join(tmpdir(), 'litroot paper fetch-'))
     try {
       await mkdir(join(root, 'bin'))
       await mkdir(join(root, 'runtime'))
       await writeFile(join(root, 'bin', 'paper-fetch.cmd'), '@echo off\n')
       await writeFile(join(root, 'runtime', 'python.exe'), '')
-      await expect(windowsPaperFetchCommand(join(root, 'bin', 'paper-fetch.cmd'))).resolves.toEqual({
+      const node = join(root, 'runtime', 'node', 'node.exe')
+      if (bundledNode) {
+        await mkdir(join(root, 'runtime', 'node'))
+        await writeFile(node, '')
+      }
+      const command = await windowsPaperFetchCommand(join(root, 'bin', 'paper-fetch.cmd'))
+      const nodeDefaults = bundledNode ? { MATHML_TO_LATEX_NODE_BIN: node, PLAYWRIGHT_NODEJS_PATH: node } : {}
+      expect(command).toEqual({
         executable: join(root, 'runtime', 'python.exe'),
         prefixArgs: ['-X', 'utf8', '-m', 'paper_fetch.cli'],
-        envDefaults: { PAPER_FETCH_ENV_FILE: join(root, 'offline.env') }
+        envDefaults: { PAPER_FETCH_ENV_FILE: join(root, 'offline.env'), ...nodeDefaults }
       })
+      expect(paperFetchEnvironment(command, { PAPER_FETCH_ENV_FILE: 'custom.env' }))
+        .toEqual({ PAPER_FETCH_ENV_FILE: 'custom.env', ...nodeDefaults })
+      if (bundledNode) {
+        expect(paperFetchEnvironment(command, { MATHML_TO_LATEX_NODE_BIN: '', PLAYWRIGHT_NODEJS_PATH: '' }))
+          .toMatchObject(nodeDefaults)
+      }
+      expect(paperFetchEnvironment(command, { MATHML_TO_LATEX_NODE_BIN: '/custom/formula-node',
+        PLAYWRIGHT_NODEJS_PATH: '/custom/browser-node' }))
+        .toMatchObject({ MATHML_TO_LATEX_NODE_BIN: '/custom/formula-node', PLAYWRIGHT_NODEJS_PATH: '/custom/browser-node' })
+      expect(await windowsPaperFetchCommand(join(root, 'runtime', 'python.exe')))
+        .toEqual({ executable: join(root, 'runtime', 'python.exe'), prefixArgs: [] })
     } finally {
       await rm(root, { recursive: true, force: true })
     }

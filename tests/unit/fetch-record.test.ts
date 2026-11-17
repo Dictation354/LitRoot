@@ -8,6 +8,27 @@ import {
 } from '../../src/service/fetch-record.js'
 
 describe('paper-fetch record parsing', () => {
+  it('reads schema-v1 receipts and prefers primary Markdown over the internal body snapshot', () => {
+    const receipt = {
+      schema_version: 1, contract: 'paper-fetch/receipt', index: 2, status: 'completed',
+      identity: { doi: '10.4242/receipt', title: 'Receipt paper', canonical_landing_url: 'https://example.test/receipt' },
+      acceptance: { overall: 'degraded', identity: 'resolved', content: 'fulltext',
+        asset_summary: { local: 1, not_archived: 1 } },
+      content_kind: 'fulltext', warning_codes: ['asset_not_archived'],
+      body_path: '/tmp/.paper-fetch-results/run/2/body.md',
+      manifest_path: '/tmp/.paper-fetch-results/run/2/manifest.json',
+      output_paths: ['/tmp/paper.json', '/tmp/paper.md']
+    }
+    expect(parseTerminalRecord(receipt)).toMatchObject({
+      index: 2, status: 'completed', title: 'Receipt paper', canonicalDoi: '10.4242/receipt',
+      canonicalUrl: 'https://example.test/receipt', outputPath: '/tmp/paper.md',
+      acceptance: 'degraded', contentKind: 'fulltext',
+      diagnostics: { assetSummary: { local: 1, not_archived: 1 }, warningCodes: ['asset_not_archived'] }
+    })
+    expect(parseTerminalRecord({ ...receipt, output_paths: [] })?.outputPath).toBe(receipt.body_path)
+    expect(parseTerminalRecord({ ...receipt, contract: 'unrelated' })?.outputPath).toBeNull()
+  })
+
   it('reads current schema-v2 terminal records and nested failure statuses', () => {
     const record = parseTerminalRecord({
       schema_version: 2,

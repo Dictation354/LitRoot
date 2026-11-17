@@ -10,12 +10,12 @@ import type {
   CreateFetchRunRequest,
   FetchRun
 } from '../shared/contracts.js'
-import { createFetchRunRequestSchema, fetchRunSchema, fetchAssetProgressSchema } from '../shared/contracts.js'
+import { createFetchRunRequestSchema, fetchRunSchema, fetchItemStageSchema, fetchAssetProgressSchema } from '../shared/contracts.js'
 import type { ProjectLayout } from './project-layout.js'
 import type { ProjectDatabase } from './project-database.js'
 import type { ProjectScanner } from './scanner.js'
 import type { ServiceEventBus } from './events.js'
-import { atomicWriteFile } from './safe-fs.js'
+import { atomicWriteFile, canonicalFileInside } from './safe-fs.js'
 import { doiFromInput, sha256 } from './identity.js'
 import { errorMessage, LitRootError } from './errors.js'
 import { normalizePaperFetchCommand, paperFetchEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
@@ -38,7 +38,7 @@ const progressBase = z.object({
 })
 const progressEventSchema = z.discriminatedUnion('type', [
   progressBase.extend({ type: z.literal('run_started'), index: z.literal(0), total: z.number().int().min(1) }),
-  progressBase.extend({ type: z.literal('stage'), stage: z.enum(['queued', 'identity', 'fetching', 'assets', 'validating', 'writing']) }),
+  progressBase.extend({ type: z.literal('stage'), stage: fetchItemStageSchema.exclude(['acceptance', 'terminal']) }),
   progressBase.extend({ type: z.literal('assets'), ...fetchAssetProgressSchema.shape }),
   progressBase.extend({ type: z.literal('terminal'), record: z.object({ index: z.number().int().positive(), run_id: z.string().min(1), record_status: z.enum(['completed', 'failed', 'aborted']) }).passthrough() }),
   progressBase.extend({ type: z.literal('cancel_response'), status: z.enum(['cancelling', 'already_finished', 'invalid_command', 'stale_run']) })
@@ -312,7 +312,17 @@ export class PaperFetchRunner {
         ...parseJsonLines(result.stdout),
         ...await this.readManifestValues(files.paperFetchManifest)
       ]
-      const record = values.map((value) => parseTerminalRecord(value, 1)).findLast(Boolean)
+      let record = values.map((value) => parseTerminalRecord(value, 1)).findLast(Boolean)
+      if (record?.raw.contract === 'paper-fetch/receipt' && record.raw.schema_version === 1 &&
+        typeof record.raw.manifest_path === 'string') {
+        const manifest = await canonicalFileInside(files.temporaryDirectory, record.raw.manifest_path)
+        if (manifest) {
+          const detailed = (await this.readManifestValues(manifest))
+            .map((value) => parseTerminalRecord(value, 1))
+            .findLast((value) => value?.raw.schema_version === 2 && value.index === record?.index)
+          record = detailed ?? record
+        }
+      }
       await this.acceptRecord(
         run,
         activeIndexes[0] ?? 1,

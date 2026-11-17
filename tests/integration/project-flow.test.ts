@@ -27,6 +27,28 @@ afterEach(async () => {
 })
 
 describe('project lifecycle', () => {
+  it('excludes paper-fetch reading snapshots while indexing primary and nested papers', async () => {
+    const { projectPath, layout, project } = await fixture()
+    const primary = paperMarkdown({ title: 'Primary paper', doi: '10.4242/primary' })
+    await writePaper(projectPath, 'primary.md', primary)
+    const nested = join(layout.papers, 'collection')
+    const snapshots = join(layout.papers, '.paper-fetch-results', 'run-1', '1')
+    const nestedSnapshots = join(nested, '.paper-fetch-results', 'run-2', '1')
+    await mkdir(snapshots, { recursive: true })
+    await mkdir(nestedSnapshots, { recursive: true })
+    await writeFile(join(snapshots, 'body.md'), primary)
+    await writeFile(join(nestedSnapshots, 'body.md'), paperMarkdown({ doi: '10.4242/internal-only' }))
+    await writeFile(join(nested, 'paper.md'), paperMarkdown({ doi: '10.4242/nested' }))
+    try {
+      await project.start()
+      expect(project.summary()).toMatchObject({ paperCount: 2, issueCount: 0 })
+      expect(project.search({ projectId: layout.id }).items.map((paper) => paper.relativePath).sort())
+        .toEqual(['papers/collection/paper.md', 'papers/primary.md'])
+      expect(await project.scan()).toMatchObject({ discovered: 2, unchanged: 2, issues: 0 })
+      expect(await readFile(join(snapshots, 'body.md'), 'utf8')).toBe(primary)
+    } finally { await project.close() }
+  })
+
   it('refuses to replace an existing invalid project identity document', async () => {
     const sandbox = await mkdtemp(join(tmpdir(), 'litroot-invalid-project-'))
     sandboxes.push(sandbox)

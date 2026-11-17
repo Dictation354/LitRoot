@@ -2,6 +2,20 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.3.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.0) — 2026-11-17
+
+### Improved
+
+- Support paper-fetch 7.7 browser profile waiting, execution, and completion stages throughout progress persistence and the task dialog.
+- Recover single-paper results from schema-v1 stdout receipts, preferring their detailed schema-v2 manifests and retaining artifact hash validation.
+
+### Fixed
+
+- Exclude `.paper-fetch-results` reading snapshots from paper scans to prevent internal `body.md` files from taking ownership of a paper or causing duplicate conflicts.
+- Preserve the official Windows launcher's bundled Node defaults for browser and formula tools, while respecting user overrides and older installers.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.2.4...v1.3.0)
+
 ## [1.2.4](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.4) — 2026-11-15
 
 ### Fixed

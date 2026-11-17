@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ServiceEventBus } from '../../src/service/events.js'
 import { initializeProject } from '../../src/service/project-layout.js'
 import { LitRootProject } from '../../src/service/project.js'
+import { fetchRunSchema } from '../../src/shared/contracts.js'
 import { createFakePaperFetch, paperMarkdown, waitFor, writePaper } from '../helpers.js'
 
 const sandboxes: string[] = []
@@ -33,6 +34,36 @@ async function terminal(project: LitRootProject, runId: string) {
   return project.fetch.get(runId)
 }
 
+const browserStages = ['waiting_profile', 'executing_browser', 'browser_finished'] as const
+
+async function browserFixture(withPaper = false) {
+  const result = await fixture(withPaper)
+  const script = await readFile(result.executable, 'utf8')
+  await writeFile(result.executable, script.replace(
+    "  event('stage', index, { stage: 'fetching' })",
+    `  event('stage', index, { stage: 'fetching' })
+  for (const stage of ${JSON.stringify(browserStages)}) {
+    const data = stage === 'waiting_profile' ? { profile: '/fake/profile' }
+      : stage === 'executing_browser' ? { profile: '/fake/profile', queue_seconds: 0.25 }
+      : { execution_seconds: 0.5, queue_seconds: 0.25 }
+    event('stage', index, { stage, ...data })
+    if (query.includes('hold ' + stage)) {
+      for (let step = 0; step < 150 && !cancelled.has(index); step += 1) await new Promise((resolve) => setTimeout(resolve, 20))
+    } else await new Promise((resolve) => setTimeout(resolve, 50))
+    if (cancelled.has(index)) break
+  }
+  if (query.includes('browser crash')) {
+    console.error('Browser crashed')
+    event('stage', index, { stage: 'invalid_stage' })
+    process.exit(2)
+  }`
+  ).replace(
+    "  if (query.includes('protocol noise')) event('terminal', index, { record: result })",
+    "  if (query.includes('protocol noise')) event('terminal', index, { record: result })\n  event('stage', index, { stage: 'browser_finished', execution_seconds: 0.5, queue_seconds: 0.25 })"
+  ))
+  return result
+}
+
 afterEach(async () => {
   delete process.env.PAPER_FETCH_ARGS_LOG
   delete process.env.PAPER_FETCH_TEST_FAILURE
@@ -40,6 +71,108 @@ afterEach(async () => {
 })
 
 describe('paper-fetch task orchestration', () => {
+  it.each(['manifest', 'paths', 'body', 'bad-hash'])('recovers a single result from a CLI receipt (%s)', async (mode) => {
+    const { project, executable } = await fixture(true)
+    const script = await readFile(executable, 'utf8')
+    await writeFile(executable, script.replace(
+      '  if (manifest) await writeFile(manifest, JSON.stringify(result))',
+      `  const mode = ${JSON.stringify(mode)}
+  const readingDir = join(outputDir, '.paper-fetch-results', runId, '1')
+  await mkdir(readingDir, { recursive: true })
+  const body = join(readingDir, 'body.md')
+  await writeFile(body, await readFile(artifact.path))
+  const detailedManifest = join(readingDir, 'manifest.json')
+  if (mode === 'manifest' || mode === 'bad-hash') {
+    const detailed = mode === 'bad-hash' ? { ...result, output_artifacts: [{ ...artifact, sha256: '0'.repeat(64) }] } : result
+    await writeFile(detailedManifest, JSON.stringify(detailed))
+  }
+  const receipt = {
+    schema_version: 1, contract: 'paper-fetch/receipt', index: 1, status: 'completed',
+    identity: { doi: result.doi, title: 'Receipt paper' }, error: null,
+    acceptance: { overall: 'complete', identity: 'resolved', content: 'fulltext' }, content_kind: 'fulltext',
+    manifest_path: detailedManifest, body_path: body,
+    output_paths: mode === 'body' ? [] : [join(outputDir, 'paper.json'), mode === 'manifest' ? join(outputDir, 'missing.md') : artifact.path]
+  }`
+    ).replace('  console.log(JSON.stringify(result))', '  console.log(JSON.stringify(receipt))'))
+    try {
+      const created = await project.fetch.create({ projectId: project.layout.id,
+        inputs: ['10.4242/existing', 'missing event receipt'] })
+      const done = await terminal(project, created.id)
+      expect(done.executionIndexes).toEqual([2])
+      expect(done.items[0]?.state).toBe('action_required')
+      const item = done.items[1]!
+      if (mode === 'bad-hash') {
+        expect(item).toMatchObject({ state: 'failed', errorCode: 'output_hash_mismatch' })
+        expect(project.summary().paperCount).toBe(1)
+      } else {
+        expect(item).toMatchObject({ stage: 'terminal', state: 'complete', completionOrder: null })
+        expect(item.outputPath).toBe(join(project.layout.papers, mode === 'body' ? 'body.md' : 'FetchBot_2025_Fetched_paper_1.md'))
+        expect(await readFile(item.outputPath!, 'utf8')).toContain('Complete fake full text body.')
+        expect(project.summary()).toMatchObject({ paperCount: 2, issueCount: 0 })
+      }
+    } finally { await project.close() }
+  })
+
+  it.each([1, 2])('publishes browser stages with original indexes and accepts terminals (%i active items)', async (count) => {
+    const { project, events } = await browserFixture(true)
+    const updates: Array<ReturnType<typeof project.fetch.get>> = []
+    const unsubscribe = events.subscribe((event) => {
+      if (event.type === 'fetch.changed') updates.push(event.run)
+    })
+    try {
+      const created = await project.fetch.create({ projectId: project.layout.id,
+        inputs: ['10.4242/existing', ...Array.from({ length: count }, (_, index) => `browser paper ${index}`)] })
+      const done = await terminal(project, created.id)
+      expect(done.executionIndexes).toEqual(Array.from({ length: count }, (_, index) => index + 2))
+      expect(done.items[0]).toMatchObject({ stage: 'terminal', state: 'action_required' })
+      for (const item of done.items.slice(1)) {
+        const stages = updates.map((update) => update.items[item.index - 1]?.stage)
+        expect(stages.filter((stage, index) => index === 0 || stage !== stages[index - 1]))
+          .toEqual(expect.arrayContaining([...browserStages, 'assets', 'acceptance', 'terminal']))
+        const browserUpdates = updates.filter((update) => browserStages.includes(update.items[item.index - 1]?.stage as typeof browserStages[number]))
+        expect([...new Set(browserUpdates.map((update) => update.items[item.index - 1]?.stage))]).toEqual(browserStages)
+        for (const update of browserUpdates) {
+          expect(fetchRunSchema.safeParse(update).success).toBe(true)
+          expect(update.items[item.index - 1]).toMatchObject({ state: 'running', stageStartedAt: expect.any(String) })
+          expect(update.items[0]?.stage).toBe('terminal')
+        }
+        expect(item).toMatchObject({ stage: 'terminal', state: 'complete', completionOrder: count - item.index + 2 })
+      }
+      expect(done.completionCounter).toBe(count)
+      expect(project.search({ projectId: project.layout.id }).total).toBe(count + 1)
+    } finally { unsubscribe(); await project.close() }
+  })
+
+  it.each([1, 2])('excludes browser progress from stderr while preserving actual diagnostics (%i items)', async (count) => {
+    const { project } = await browserFixture()
+    try {
+      const created = await project.fetch.create({ projectId: project.layout.id,
+        inputs: Array.from({ length: count }, () => 'browser crash') })
+      const done = await terminal(project, created.id)
+      for (const item of done.items) {
+        expect(item.state).toBe('failed')
+        expect(item.reason).toContain('Browser crashed')
+        expect(item.reason).toContain('"stage":"invalid_stage"')
+        for (const stage of browserStages) expect(item.reason).not.toContain(`"stage":"${stage}"`)
+      }
+    } finally { await project.close() }
+  })
+
+  it.each(browserStages)('cancels an item during %s using its mapped engine index', async (stage) => {
+    const { project } = await browserFixture(true)
+    try {
+      const created = await project.fetch.create({ projectId: project.layout.id,
+        inputs: ['10.4242/existing', 'browser remaining', `hold ${stage}`] })
+      await waitFor(() => project.fetch.get(created.id).items[2]?.stage === stage)
+      await project.fetch.cancelItem(created.id, 3)
+      const done = await terminal(project, created.id)
+      expect(done.executionIndexes).toEqual([2, 3])
+      expect(done.items.map((item) => item.state)).toEqual(['action_required', 'complete', 'cancelled'])
+      expect(done.items[2]).toMatchObject({ stage: 'terminal', reason: 'Cancelled by control', completionOrder: 1 })
+      expect(done.items[1]?.completionOrder).toBe(2)
+    } finally { await project.close() }
+  })
+
   it('keeps batch input order while reporting complete, limited, ambiguity, auth and failure independently', async () => {
     const { sandbox, project } = await fixture()
     const argsLog = join(sandbox, 'paper-fetch-args.json')

@@ -2,6 +2,20 @@
 
 [English](CHANGELOG.md)
 
+## [1.3.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.0) — 2026-11-17
+
+### 改进
+
+- 兼容 paper-fetch 7.7 的浏览器 profile 等待、执行及结束阶段，同步进度持久化与任务界面显示。
+- 支持从 schema-v1 stdout 回执恢复单篇结果，优先读取详细 schema-v2 manifest，并保留产物哈希校验。
+
+### 修复
+
+- 扫描论文时排除 `.paper-fetch-results` 内部阅读快照，避免 `body.md` 被错误入库或造成重复冲突。
+- 保留 Windows 官方入口为浏览器和公式工具设置的内置 Node 默认路径，同时兼容用户覆盖与旧安装包。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.2.4...v1.3.0)
+
 ## [1.2.4](https://github.com/Dictation354/LitRoot/releases/tag/v1.2.4) — 2026-11-15
 
 ### 修复

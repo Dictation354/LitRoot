@@ -11,6 +11,7 @@ import type {
   PaperListItem,
   ProjectSummary
 } from '../../src/shared/contracts.js'
+import { serviceEventSchema } from '../../src/shared/contracts.js'
 import { AddPapersDialog } from '../../src/renderer/src/AddPapersDialog.js'
 import { AddFeedDialog } from '../../src/renderer/src/FeedInbox.js'
 import { LibraryTable } from '../../src/renderer/src/LibraryTable.js'
@@ -295,6 +296,29 @@ describe('dialog request races', () => {
   })
 })
 
+
+it.each([
+  ['waiting_profile', '等待浏览器使用权'],
+  ['executing_browser', '浏览器执行'],
+  ['browser_finished', '浏览器执行结束']
+] as const)('renders %s from a validated progress update without marking the item finished', async (stage, label) => {
+  const selectedProject = project('project_test', 'Test')
+  const running = run('run_test', selectedProject.id, new Date().toISOString())
+  running.state = 'running'
+  running.items = [{ ...itemFor(1, 'Browser paper'), stage: 'fetching', state: 'running' }]
+  window.litroot = transportFor({ fetch: { list: async () => [running] } } as unknown as LitRootBridge)
+  const props = { open: true, project: selectedProject, onClose: vi.fn(), onOpenPaper: vi.fn() }
+  await act(async () => root.render(<AddPapersDialog {...props} event={null} />))
+  await settle()
+  const update = structuredClone(running)
+  Object.assign(update.items[0]!, { stage, stageStartedAt: new Date().toISOString() })
+  const event = serviceEventSchema.parse({ type: 'fetch.changed', projectId: selectedProject.id,
+    at: new Date().toISOString(), run: update })
+  await act(async () => root.render(<AddPapersDialog {...props} event={event} />))
+  expect(container.textContent).toContain(label)
+  expect(container.textContent).toContain('已结束 0/1')
+  expect([...container.querySelectorAll('button')].find((button) => button.textContent === '取消此篇')?.disabled).toBe(false)
+})
 
 it.each(['single', 'batch', 'refresh', 'batch-refresh'])('shows real stages and item cancellation for %s', async (mode) => {
   const selectedProject = project('project_test', 'Test')

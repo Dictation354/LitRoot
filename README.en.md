@@ -76,7 +76,9 @@ Single and batch fetches and refreshes show stages, elapsed stage time, and asse
 
 LitRoot requires **paper-fetch 7.0.1 or a later stable release**, with `--progress jsonl` and `--control-stdin`. Diagnostics and create/resume use the same check. Older, unrecognized, prerelease or capability-incomplete engines receive an upgrade message before any task is created or reset. Existing papers and historical tasks remain readable.
 
-When converting the official Windows `.cmd` launcher to its Python entry point, LitRoot supplies the installation’s `offline.env` as the default `PAPER_FETCH_ENV_FILE`. A nonempty user setting takes precedence; diagnostics and fetching share the environment. Native `.exe`, Linux/macOS and WSL entries do not infer a Windows installation path.
+When converting the official Windows `.cmd` launcher to its Python entry point, LitRoot supplies the installation’s `offline.env` as the default `PAPER_FETCH_ENV_FILE`. If the installation includes a separate Node runtime, it also supplies `MATHML_TO_LATEX_NODE_BIN` and `PLAYWRIGHT_NODEJS_PATH` defaults pointing to it. Nonempty user settings take precedence; diagnostics and fetching share the environment. Native `.exe`, Linux/macOS and WSL entries do not infer a Windows installation path.
+
+Single-result recovery supports paper-fetch 7.7 stdout receipts, preferring the detailed manifest referenced inside staging and falling back to the receipt’s Markdown paths. Scans exclude `.paper-fetch-results/` reading snapshots under `papers/` so internal `body.md` files are not indexed as additional papers.
 
 Task details retain source, acquisition route, error codes, fallback reasons and asset/content quality summaries. A copyable manual authentication command appears only for providers declared by the engine; LitRoot never logs in automatically. Unscheduled items caused by rate limits or batch stops are counted separately from cancellations and can be retried with unfinished items. Successfully archived items remain intact.
 
