@@ -502,6 +502,32 @@ describe('paper-fetch task orchestration', () => {
     expect(reopened.fetch.get(created.id).state).toBe('interrupted')
     await reopened.close()
   })
+
+  it('makes an item left running by an abrupt service stop resumable after reopening', async () => {
+    const { project, executable } = await fixture()
+    const created = await project.fetch.create({
+      projectId: project.layout.id, inputs: ['slow shutdown']
+    })
+    await waitFor(async () => {
+      const stored = fetchRunSchema.parse(JSON.parse(await readFile(created.manifestPath, 'utf8')))
+      return stored.state === 'running' && stored.items[0]?.state === 'running'
+    })
+    const activeManifest = await readFile(created.manifestPath)
+    await project.close()
+    // Restore the last persisted snapshot before shutdown finalized the run.
+    await writeFile(created.manifestPath, activeManifest)
+
+    const reopened = new LitRootProject(project.layout, new ServiceEventBus(), executable)
+    try {
+      await reopened.start()
+      const interrupted = reopened.fetch.get(created.id)
+      expect(interrupted.state).toBe('interrupted')
+      expect(interrupted.items[0]).toMatchObject({ stage: 'terminal', state: 'cancelled' })
+      const resumed = await reopened.fetch.resume(created.id)
+      expect(resumed.items[0]?.attempt).toBe(2)
+    } finally { await reopened.close() }
+  })
+
   it('archives early terminals, parses split and joined progress lines, and ignores stale and duplicate events', async () => {
     const { project, events } = await fixture()
     const scopes: string[] = []

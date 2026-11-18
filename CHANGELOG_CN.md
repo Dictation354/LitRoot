@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md)
 
+## [1.3.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.1) — 2026-11-18
+
+### 修复
+
+- 修复异常退出后无法继续未完成抓取任务的问题，包括完成 AMS 人工认证后发起的重试。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.3.0...v1.3.1)
+
 ## [1.3.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.0) — 2026-11-17
 
 ### 改进

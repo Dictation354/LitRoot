@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.3.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.1) — 2026-11-18
+
+### Fixed
+
+- Restore the option to continue unfinished fetches after an unexpected shutdown, including AMS fetches retried after manual authentication.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.3.0...v1.3.1)
+
 ## [1.3.0](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.0) — 2026-11-17
 
 ### Improved

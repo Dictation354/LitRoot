@@ -109,7 +109,7 @@ export class PaperFetchRunner {
       try {
         const parsed = fetchRunSchema.parse(JSON.parse(await readFile(join(this.layout.runs, entry.name), 'utf8')))
         parsed.completionCounter = Math.max(parsed.completionCounter, ...parsed.items.map((item) => item.completionOrder ?? 0))
-        if (['queued', 'running', 'cancelling'].includes(parsed.state)) parsed.state = 'interrupted'
+        if (['queued', 'running', 'cancelling', 'interrupted'].includes(parsed.state)) this.markInterrupted(parsed)
         this.runs.set(parsed.id, parsed)
         await this.persist(parsed)
       } catch {
@@ -340,14 +340,7 @@ export class PaperFetchRunner {
 
     await this.scanner.scan()
     if ((run.state as string) === 'interrupted') {
-      for (const item of run.items) {
-        if (['pending', 'running', 'cancelling'].includes(item.state)) {
-          item.stage = 'terminal'
-          item.state = 'cancelled'
-          item.reason = '服务已停止；可从 manifest 恢复。'
-        }
-      }
-      run.state = 'interrupted'
+      this.markInterrupted(run)
     } else if ((run.state as string) === 'cancelling' || result.signal) {
       for (const item of run.items) {
         if (['pending', 'running', 'cancelling'].includes(item.state)) {
@@ -589,6 +582,17 @@ export class PaperFetchRunner {
     }
     run.state = 'completed'
     run.finishedAt = now()
+  }
+
+  private markInterrupted(run: FetchRun): void {
+    run.state = 'interrupted'
+    for (const item of run.items) {
+      if (['pending', 'running', 'cancelling'].includes(item.state)) {
+        item.stage = 'terminal'
+        item.state = 'cancelled'
+        item.reason = '服务已停止；可从 manifest 恢复。'
+      }
+    }
   }
 
   private async readManifestValues(path: string): Promise<unknown[]> {
