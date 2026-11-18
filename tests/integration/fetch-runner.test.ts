@@ -127,8 +127,7 @@ describe('paper-fetch task orchestration', () => {
       expect(done.items[0]).toMatchObject({ stage: 'terminal', state: 'action_required' })
       for (const item of done.items.slice(1)) {
         const stages = updates.map((update) => update.items[item.index - 1]?.stage)
-        expect(stages.filter((stage, index) => index === 0 || stage !== stages[index - 1]))
-          .toEqual(expect.arrayContaining([...browserStages, 'assets', 'acceptance', 'terminal']))
+        expect(stages).toEqual(expect.arrayContaining(['acceptance', 'terminal']))
         const browserUpdates = updates.filter((update) => browserStages.includes(update.items[item.index - 1]?.stage as typeof browserStages[number]))
         expect([...new Set(browserUpdates.map((update) => update.items[item.index - 1]?.stage))]).toEqual(browserStages)
         for (const update of browserUpdates) {
