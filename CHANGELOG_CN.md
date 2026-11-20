@@ -2,6 +2,21 @@
 
 [English](CHANGELOG.md)
 
+## [1.3.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.2) — 2026-11-20
+
+### 改进
+
+- 期刊雷达添加订阅时，按期刊的多个 ISSN 从 Crossref 回填最近 30 天的记录，按 DOI 去重，并支持取消首次抓取。
+- 新增 90 天视图和保留期限，保留出版日期的原始精度，并按 Crossref 索引时间补抓上次刷新后才入索引的记录。
+- 期刊雷达数据库升级保留已有的 Crossref 订阅，并清除旧版 RSS 订阅及条目。
+
+### 修复
+
+- 支持从 paper-fetch 8.0.0 回执恢复单篇结果，使用详细 manifest 或回执中的 Markdown 路径，并校验产物。
+- 区分批量未调度、取消和失败，在任务详情中显示公式和表格的质量计数。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.3.1...v1.3.2)
+
 ## [1.3.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.1) — 2026-11-18
 
 ### 修复

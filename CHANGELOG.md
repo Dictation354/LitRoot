@@ -2,6 +2,21 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.3.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.2) — 2026-11-20
+
+### Improved
+
+- Journal Radar backfills 30 days of Crossref records across a journal's ISSNs when adding a subscription, deduplicates by DOI, and lets you cancel the initial fetch.
+- Added a 90-day view and retention window, preserved partial publication dates, and used Crossref indexing dates to pick up records indexed after the previous refresh.
+- The feed database upgrade keeps existing Crossref subscriptions and clears legacy RSS subscriptions and entries.
+
+### Fixed
+
+- Recovered single-paper results from paper-fetch 8.0.0 receipts using the detailed manifest or the receipt's Markdown paths, with artifact validation.
+- Distinguished unscheduled batch items from cancellations and failures, and displayed formula and table quality counts in task details.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.3.1...v1.3.2)
+
 ## [1.3.1](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.1) — 2026-11-18
 
 ### Fixed
