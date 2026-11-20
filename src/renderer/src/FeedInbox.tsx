@@ -1,7 +1,9 @@
 import { useModalDialog } from './workspace-hooks'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { FEED_DAY_RANGES } from '../../shared/contracts'
 import type {
   FeedItem,
+  FeedItemsResult,
   FeedSubscription,
   JournalCandidate,
   ProjectSummary,
@@ -11,7 +13,7 @@ import { bridge, errorMessage } from './bridge'
 import { FormattedTitle } from './FormattedTitle'
 
 const PAGE_SIZE_KEY = 'litroot.feed-page-size'
-type FeedDays = 1 | 3 | 7 | 14 | 30
+type FeedDays = typeof FEED_DAY_RANGES[number]
 
 function authors(value: string[]): string {
   if (value.length === 0) return '未知作者'
@@ -19,7 +21,9 @@ function authors(value: string[]): string {
 }
 
 function date(value: string | null): string {
-  return value ? new Date(value).toLocaleDateString() : '日期未知'
+  if (!value) return '日期未知'
+  const [year, month, day] = value.split('-')
+  return `${year}年${month ? `${Number(month)}月` : ''}${day ? `${Number(day)}日` : ''}`
 }
 
 export function FeedInbox({
@@ -37,9 +41,8 @@ export function FeedInbox({
   onFetchCreated(projectId: string, runId: string): void
   onMessage(message: string): void
 }) {
-  const [items, setItems] = useState<FeedItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [offset, setOffset] = useState(0)
+  const [pagePosition, setPagePosition] = useState({ scope, offset: 0 })
+  const offset = pagePosition.scope === scope ? pagePosition.offset : 0
   const [pageSize, setPageSize] = useState(() => {
     try {
       const value: unknown = JSON.parse(window.localStorage.getItem(PAGE_SIZE_KEY) ?? 'null')
@@ -51,12 +54,18 @@ export function FeedInbox({
   const [selected, setSelected] = useState<string[]>([])
   const [focusedId, setFocusedId] = useState('')
   const [projectId, setProjectId] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [days, setDays] = useState<FeedDays>(7)
   const [revision, setRevision] = useState('')
   const [detailOpen, setDetailOpen] = useState(false)
   const fetchRequest = useRef(0)
+  const query = useMemo(() => ({ subscriptionId: scope === 'recent' ? null : scope, days, limit: pageSize, offset }),
+    [scope, days, pageSize, offset])
+  const [page, setPage] = useState<{ query: typeof query; result: FeedItemsResult } | null>(null)
+  const currentResult = page?.query === query ? page.result : null
+  const items = currentResult?.items ?? []
+  const total = currentResult?.total ?? 0
   useEffect(() => { if (event?.type === 'feeds.changed') setRevision(event.at) }, [event])
   useEffect(() => () => { fetchRequest.current += 1 }, [scope])
   const focused = items.find((item) => item.id === focusedId) ?? null
@@ -77,41 +86,36 @@ export function FeedInbox({
   }, [pageSize])
 
   useLayoutEffect(() => {
-    setItems([])
-    setTotal(0)
-    setDetailOpen(false)
+    setPagePosition({ scope, offset: 0 })
     setSubmitting(false)
-    setOffset(0)
+  }, [scope])
+
+  useLayoutEffect(() => {
+    setDetailOpen(false)
     setSelected([])
     setFocusedId('')
-  }, [scope])
+  }, [query])
 
   useEffect(() => {
     if (!eligibleProjects.some((project) => project.id === projectId)) setProjectId(eligibleProjects[0]?.id ?? '')
   }, [eligibleProjects, projectId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let cancelled = false
     setLoading(true)
-    void bridge().feeds.items({
-      subscriptionId: scope === 'recent' ? null : scope,
-      days,
-      limit: pageSize,
-      offset
-    }).then((result) => {
+    void bridge().feeds.items(query).then((result) => {
       if (cancelled) return
       if (offset > 0 && offset >= result.total) {
-        setOffset(Math.max(0, Math.ceil(result.total / pageSize) - 1) * pageSize)
+        setPagePosition({ scope, offset: Math.max(0, Math.ceil(result.total / pageSize) - 1) * pageSize })
         return
       }
-      setItems(result.items)
-      setTotal(result.total)
+      setPage({ query, result })
       setFocusedId((current) => result.items.some((item) => item.id === current) ? current : result.items[0]?.id ?? '')
       setSelected((current) => current.filter((id) => result.items.some((item) => item.id === id)))
     }).catch((error) => { if (!cancelled) onMessage(errorMessage(error)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [days, scope, offset, pageSize, revision, onMessage])
+  }, [query, scope, offset, pageSize, revision, onMessage])
 
   const focus = (item: FeedItem, toggle = false): void => {
     setFocusedId(item.id)
@@ -129,7 +133,7 @@ export function FeedInbox({
   }
 
   const createFetch = async (): Promise<void> => {
-    if (!projectId || selected.length === 0 || submitting) return
+    if (!currentResult || !projectId || selected.length === 0 || submitting) return
     const request = ++fetchRequest.current
     const chosen = selected.map((id) => items.find((item) => item.id === id)).filter((item): item is FeedItem => Boolean(item))
     setSubmitting(true)
@@ -163,16 +167,16 @@ export function FeedInbox({
             <select
               aria-label="登记时间范围"
               value={days}
-              onChange={(event) => { setDays(Number(event.target.value) as FeedDays); setOffset(0) }}
+              onChange={(event) => { setDays(Number(event.target.value) as FeedDays); setPagePosition({ scope, offset: 0 }) }}
             >
-              {[1, 3, 7, 14, 30].map((value) => <option value={value} key={value}>近 {value} 天</option>)}
+              {FEED_DAY_RANGES.map((value) => <option value={value} key={value}>近 {value} 天</option>)}
             </select>
             {selected.length > 0 && <span>已选 {selected.length}/50</span>}
             <select aria-label="目标项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
               {eligibleProjects.length === 0 && <option value="">无可用项目</option>}
               {eligibleProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
             </select>
-            <button className="primary-button" type="button" disabled={!projectId || selected.length === 0 || submitting} onClick={() => void createFetch()}>
+            <button className="primary-button" type="button" disabled={!currentResult || !projectId || selected.length === 0 || submitting} onClick={() => void createFetch()}>
               {submitting ? '正在创建…' : '添加到项目'}
             </button>
           </div>
@@ -212,23 +216,22 @@ export function FeedInbox({
                 <small>{authors(item.authors)}</small>
               </div>
               <span role="gridcell">{item.sourceTitle}</span>
-              <time role="gridcell">{date(item.publishedAt ?? item.discoveredAt)}</time>
+              <time role="gridcell" dateTime={item.publishedAt ?? undefined}>{date(item.publishedAt)}</time>
             </div>
           ))}
           {!loading && items.length === 0 && <div className="empty-state"><h2>这段时间没有文献</h2><p>Crossref 登记的新文献会在刷新期刊后出现。</p></div>}
         </div>
         <footer className="library-footer">
-          <span>{total === 0 ? '无条目' : `${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}`}</span>
+          <span>{loading && !currentResult ? '正在加载…' : total === 0 ? '无条目' : `${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}`}</span>
           <div>
             <label>每页条数 <select aria-label="每页条数" value={pageSize} onChange={(event) => {
               setPageSize(Number(event.target.value))
-              setOffset(0)
-              setSelected([])
+              setPagePosition({ scope, offset: 0 })
             }}>
               {[20, 50, 100, 200].map((value) => <option value={value} key={value}>{value}</option>)}
             </select></label>
-            <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一页</button>
-            <button type="button" disabled={offset + pageSize >= total} onClick={() => setOffset(offset + pageSize)}>下一页</button>
+            <button type="button" disabled={offset === 0} onClick={() => setPagePosition({ scope, offset: Math.max(0, offset - pageSize) })}>上一页</button>
+            <button type="button" disabled={offset + pageSize >= total} onClick={() => setPagePosition({ scope, offset: offset + pageSize })}>下一页</button>
           </div>
         </footer>
       </section>
@@ -240,7 +243,7 @@ export function FeedInbox({
             <h2><FormattedTitle>{focused.title}</FormattedTitle></h2>
             <p className="reader-authors">{authors(focused.authors)}</p>
             <div className="feed-detail-meta">
-              <span>{date(focused.publishedAt)}</span>
+              <time dateTime={focused.publishedAt ?? undefined}>{date(focused.publishedAt)}</time>
               {focused.doi && <button className="text-button" type="button" onClick={() => void bridge().system.openExternal(`https://doi.org/${focused.doi}`).catch((error) => onMessage(errorMessage(error)))}>DOI {focused.doi}</button>}
               {focused.url && <button className="text-button" type="button" onClick={() => void bridge().system.openExternal(focused.url).catch((error) => onMessage(errorMessage(error)))}>打开原文</button>}
               <button className="text-button" type="button" onClick={() => void bridge().feeds.markRead({ itemIds: [focused.id], read: !focused.readAt }).catch((error) => onMessage(errorMessage(error)))}>
@@ -260,22 +263,56 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
   onClose(): void
   onAdded(feed: FeedSubscription): void
 }) {
-  const dialogRef = useModalDialog(open, onClose)
+  const dialogRef = useModalDialog(open, () => { void dismiss() })
   const [input, setInput] = useState('')
   const [message, setMessage] = useState('')
   const [candidates, setCandidates] = useState<JournalCandidate[]>([])
   const [addingIssn, setAddingIssn] = useState('')
+  const [cancelling, setCancelling] = useState(false)
   const [searching, setSearching] = useState(false)
   const request = useRef(0)
+  const activeAdd = useRef<{ id: string; result: Promise<FeedSubscription>; cancelling: boolean } | null>(null)
 
   useEffect(() => {
     if (!open) {
       request.current += 1
       setSearching(false)
       setAddingIssn('')
+      setCancelling(false)
     }
-    return () => { request.current += 1 }
+    return () => { request.current += 1; activeAdd.current = null }
   }, [open])
+
+  function closeDialog(): void {
+    request.current += 1
+    activeAdd.current = null
+    setSearching(false)
+    setAddingIssn('')
+    setCancelling(false)
+    onClose()
+  }
+
+  async function dismiss(): Promise<void> {
+    const attempt = activeAdd.current
+    if (cancelling || attempt?.cancelling) return
+    if (!attempt) {
+      closeDialog()
+      return
+    }
+    const current = request.current
+    attempt.cancelling = true
+    setCancelling(true)
+    try {
+      const cancelled = await bridge().feeds.cancelAdd(attempt.id)
+      if (!cancelled) await attempt.result.catch(() => undefined)
+      if (current === request.current) closeDialog()
+    } catch (error) {
+      if (current !== request.current) return
+      attempt.cancelling = false
+      setCancelling(false)
+      setMessage(errorMessage(error))
+    }
+  }
 
   if (!open) return null
 
@@ -283,7 +320,6 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
   const changeInput = (value: string): void => {
     request.current += 1
     setSearching(false)
-    setAddingIssn('')
     setInput(value)
     setCandidates([])
     setMessage('')
@@ -305,28 +341,35 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
     }
   }
   const add = async (candidate: JournalCandidate): Promise<void> => {
+    if (activeAdd.current) return
     const current = ++request.current
     setAddingIssn(candidate.issn)
     setMessage('')
     try {
-      const feed = await bridge().feeds.add({ issn: candidate.issn, title: candidate.displayName })
+      const id = crypto.randomUUID()
+      const result = bridge().feeds.add({ requestId: id, issn: candidate.issn, title: candidate.displayName })
+      activeAdd.current = { id, result, cancelling: false }
+      const feed = await result
       if (current !== request.current) return
       setInput('')
       setCandidates([])
       onAdded(feed)
-      onClose()
+      closeDialog()
     } catch (error) {
-      if (current === request.current) setMessage(errorMessage(error))
+      if (current === request.current && !activeAdd.current?.cancelling) setMessage(errorMessage(error))
     } finally {
-      if (current === request.current) setAddingIssn('')
+      if (current === request.current) {
+        activeAdd.current = null
+        setAddingIssn('')
+      }
     }
   }
-  const working = searching || Boolean(addingIssn)
+  const working = searching || Boolean(addingIssn) || cancelling
   return (
     <dialog ref={dialogRef} className="modal feed-add-modal" aria-labelledby="feed-add-title">
-        <header className="modal-header"><div><h2 id="feed-add-title">添加期刊</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></header>
+        <header className="modal-header"><div><h2 id="feed-add-title">添加期刊</h2></div><button type="button" className="icon-button" disabled={cancelling} onClick={() => void dismiss()} aria-label="关闭">×</button></header>
         <div className="modal-body">
-          <label className="field"><span className="field-label">期刊名称或 ISSN</span><input value={input} onChange={(event) => changeInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !working) void search() }} placeholder="例如 Remote Sensing of Environment 或 0034-4257" /></label>
+          <label className="field"><span className="field-label">期刊名称或 ISSN</span><input value={input} disabled={Boolean(addingIssn) || cancelling} onChange={(event) => changeInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !working) void search() }} placeholder="例如 Remote Sensing of Environment 或 0034-4257" /></label>
 
           {candidates.length > 0 && (
             <div className="journal-results" aria-label="期刊搜索结果">
@@ -342,7 +385,7 @@ export function AddFeedDialog({ open, onClose, onAdded }: {
           )}
           {message && <div className="form-message status-error" role="alert"><p>操作未完成，请检查后重试。</p><details><summary>错误详情</summary>{message}</details></div>}
         </div>
-        <footer className="modal-footer"><button type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" disabled={working || !trimmed} onClick={() => void search()}>{searching ? '正在搜索…' : '搜索期刊'}</button></footer>
+        <footer className="modal-footer"><button type="button" disabled={cancelling} onClick={() => void dismiss()}>{cancelling ? '正在取消…' : '取消'}</button><button className="primary-button" type="button" disabled={working || !trimmed} onClick={() => void search()}>{searching ? '正在搜索…' : '搜索期刊'}</button></footer>
     </dialog>
   )
 }

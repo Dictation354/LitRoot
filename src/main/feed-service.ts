@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
+import { FEED_RETENTION_DAYS } from '../shared/contracts.js'
 import type {
   AddFeedRequest,
   FeedItem,
@@ -20,11 +21,13 @@ const CROSSREF_CONTACT = 'clancycthern@proton.me'
 const CROSSREF_USER_AGENT = `LitRoot/1.0 (https://github.com/Dictation354/LitRoot; mailto:${CROSSREF_CONTACT})`
 const MAX_BODY_BYTES = 5 * 1024 * 1024
 const REQUEST_TIMEOUT_MS = 15_000
-const RETENTION_MS = 90 * 24 * 60 * 60 * 1000
-const REFRESH_AFTER_MS = 24 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+const REFRESH_AFTER_MS = DAY_MS
 const TIMER_INTERVAL_MS = 60 * 60 * 1000
+const REQUEST_SPACING_MS = 350
+const MAX_IN_FLIGHT = 3
 const WORK_PAGE_SIZE = 100
-const DATABASE_VERSION = 3
+const DATABASE_VERSION = 4
 
 const crossrefIssnSchema = z.string().regex(/^\d{4}-\d{3}[\dX]$/i)
   .transform((value) => value.toUpperCase())
@@ -150,14 +153,14 @@ function publicationDate(work: CrossrefWork): string | null {
   const date = work['published-print'] ?? work['published-online'] ?? work.published ?? work.issued
   const parts = date?.['date-parts'][0]
   if (!parts) return null
-  const year = parts[0]
+  const [year] = parts
   const month = parts[1] ?? 1
   const day = parts[2] ?? 1
-  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null
-  const timestamp = Date.UTC(year, month - 1, day)
-  const result = new Date(timestamp)
+  if (!year || year < 1 || year > 9999) return null
+  const result = new Date(0)
+  result.setUTCFullYear(year, month - 1, day)
   if (result.getUTCFullYear() !== year || result.getUTCMonth() !== month - 1 || result.getUTCDate() !== day) return null
-  return result.toISOString()
+  return result.toISOString().slice(0, [4, 7, 10][parts.length - 1])
 }
 
 function parseWork(work: CrossrefWork): ParsedWork {
@@ -178,16 +181,16 @@ function parseWork(work: CrossrefWork): ParsedWork {
   }
 }
 
-function dateOnly(timestamp: number): string {
-  return new Date(timestamp).toISOString().slice(0, 10)
+function cutoff(days = FEED_RETENTION_DAYS, timestamp = Date.now()): string {
+  return new Date(timestamp - days * DAY_MS).toISOString()
 }
 
 function candidate(journal: CrossrefJournal, preferredIssn?: string): JournalCandidate {
-  const issns = [...new Set(journal.ISSN)]
+  const issns = [...new Set(preferredIssn ? [...journal.ISSN, preferredIssn] : journal.ISSN)]
   return {
     displayName: journal.title,
     publisher: journal.publisher?.trim() || null,
-    issn: preferredIssn && issns.includes(preferredIssn) ? preferredIssn : issns[0]!,
+    issn: preferredIssn ?? issns[0]!,
     issns
   }
 }
@@ -221,18 +224,85 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-async function requestCrossref(path: string, parentSignal?: AbortSignal, notFoundIsNull = false): Promise<unknown | null> {
+function retryAfterMs(header: string | null): number {
+  const value = header?.trim() ?? ''
+  if (/^\d+$/.test(value)) {
+    const delay = Number(value) * 1_000
+    if (Number.isFinite(delay)) return delay
+  }
+  const httpDate = /^[a-z]{3,9}, .+ GMT$/i.test(value) ? value
+    : /^[a-z]{3} [a-z]{3} [ \d]\d \d\d:\d\d:\d\d \d{4}$/i.test(value) ? `${value} GMT` : ''
+  const timestamp = Date.parse(httpDate)
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 1_000
+}
+
+interface CrossrefRequest {
+  start(): void
+}
+
+class CrossrefQueue {
+  private readonly pending: CrossrefRequest[] = []
+  private inFlight = 0
+  private nextStart = 0
+  private pausedUntil = 0
+  private timer: ReturnType<typeof setTimeout> | undefined
+
+  request(path: string, signal: AbortSignal, notFoundIsNull = false): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      signal.throwIfAborted()
+      const cancel = (): void => {
+        this.pending.splice(this.pending.indexOf(job), 1)
+        reject(signal.reason)
+        this.pump()
+      }
+      const job: CrossrefRequest = {
+        start: () => {
+          signal.removeEventListener('abort', cancel)
+          void requestCrossref(path, signal, notFoundIsNull, (delay) => {
+            this.pausedUntil = Math.max(this.pausedUntil, performance.now() + delay)
+          }).then(resolve, reject).finally(() => {
+            this.inFlight -= 1
+            this.pump()
+          })
+        }
+      }
+      signal.addEventListener('abort', cancel, { once: true })
+      this.pending.push(job)
+      this.pump()
+    })
+  }
+
+  private pump(): void {
+    clearTimeout(this.timer)
+    this.timer = undefined
+    if (this.pending.length === 0 || this.inFlight >= MAX_IN_FLIGHT) return
+    const current = performance.now()
+    const delay = Math.max(this.nextStart, this.pausedUntil) - current
+    if (delay > 0) {
+      this.timer = setTimeout(() => this.pump(), Math.min(Math.ceil(delay), 2_147_483_647))
+      return
+    }
+    this.nextStart = current + REQUEST_SPACING_MS
+    this.inFlight += 1
+    this.pending.shift()!.start()
+    this.pump()
+  }
+}
+
+async function requestCrossref(
+  path: string, parentSignal: AbortSignal, notFoundIsNull: boolean, pause: (delay: number) => void
+): Promise<unknown> {
   const url = new URL(path, CROSSREF_ORIGIN)
   if (url.origin !== CROSSREF_ORIGIN) throw new Error('Crossref 请求地址无效。')
   url.searchParams.set('mailto', CROSSREF_CONTACT)
   const abort = new AbortController()
-  const forwardAbort = (): void => abort.abort(parentSignal?.reason)
-  parentSignal?.addEventListener('abort', forwardAbort, { once: true })
+  const signal = AbortSignal.any([abort.signal, parentSignal])
   const timeout = setTimeout(() => abort.abort(new Error('Crossref 请求超过 15 秒。')), REQUEST_TIMEOUT_MS)
   try {
+    signal.throwIfAborted()
     const response = await fetch(url, {
       redirect: 'error',
-      signal: abort.signal,
+      signal,
       headers: { accept: 'application/json', 'user-agent': CROSSREF_USER_AGENT }
     })
     if (response.status === 404 && notFoundIsNull) {
@@ -240,39 +310,32 @@ async function requestCrossref(path: string, parentSignal?: AbortSignal, notFoun
       return null
     }
     if (!response.ok) {
+      if (response.status === 429) pause(retryAfterMs(response.headers.get('retry-after')))
       await response.body?.cancel()
       if (response.status === 429) throw new Error('Crossref 请求受限（HTTP 429），请稍后重试。')
       throw new Error(`Crossref 请求失败（HTTP ${response.status}）。`)
     }
     return await readJson(response)
   } catch (error) {
-    if (abort.signal.aborted) {
-      if (parentSignal?.aborted) throw new Error('Crossref 刷新已取消。')
-      throw new Error('Crossref 请求超过 15 秒。')
-    }
+    signal.throwIfAborted()
     if (error instanceof Error && error.message.startsWith('Crossref ')) throw error
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`Crossref 暂时不可用：${message}`)
   } finally {
     clearTimeout(timeout)
-    parentSignal?.removeEventListener('abort', forwardAbort)
   }
 }
 
-async function fetchJournal(issn: string, signal?: AbortSignal): Promise<JournalCandidate | null> {
-  const value = await requestCrossref(`/journals/${encodeURIComponent(issn)}`, signal, true)
-  if (value === null) return null
-  try {
-    return candidate(crossrefJournalResultSchema.parse(value).message, issn)
-  } catch (error) {
-    if (error instanceof z.ZodError) throw new Error('Crossref 返回了无法识别的数据。')
-    throw error
-  }
+function refreshCancelled(): Error {
+  return new Error('Crossref 刷新已取消。')
 }
 
 export class FeedService {
   private readonly database: DatabaseSync
   private readonly active = new Map<string, AbortController>()
+  private readonly additions = new Map<string, AbortController>()
+  private readonly crossref = new CrossrefQueue()
+  private readonly shutdown = new AbortController()
   private timer: ReturnType<typeof setInterval> | null = null
   private closed = false
   private databaseClosed = false
@@ -287,15 +350,22 @@ export class FeedService {
     }
     this.database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
     if (version < DATABASE_VERSION) {
+      this.transaction(() => this.migrate(version))
+    }
+    this.cleanup()
+  }
+
+  private migrate(version: number): void {
+    if (version < 3) {
       this.database.exec(`
-        BEGIN IMMEDIATE;
         DROP TABLE IF EXISTS journal_feed_mappings;
         DROP TABLE IF EXISTS items;
         DROP TABLE IF EXISTS subscriptions;
         CREATE TABLE subscriptions (
           id TEXT PRIMARY KEY, issn TEXT NOT NULL UNIQUE, issns_json TEXT NOT NULL,
           title TEXT NOT NULL, publisher TEXT NOT NULL DEFAULT '',
-          last_checked_at TEXT, last_successful_at TEXT, error TEXT
+          last_checked_at TEXT, last_successful_at TEXT, error TEXT,
+          backfill_from_at TEXT, index_checkpoint_at TEXT
         );
         CREATE TABLE items (
           id TEXT PRIMARY KEY,
@@ -307,24 +377,35 @@ export class FeedService {
         );
         CREATE INDEX idx_feed_items_order ON items(discovered_at DESC);
         CREATE INDEX idx_feed_items_unread ON items(subscription_id, read_at);
-        PRAGMA user_version = ${DATABASE_VERSION};
-        COMMIT;
       `)
+    } else {
+      this.database.exec(`
+        ALTER TABLE subscriptions ADD COLUMN backfill_from_at TEXT;
+        ALTER TABLE subscriptions ADD COLUMN index_checkpoint_at TEXT;
+        UPDATE items SET published_at = CASE
+          WHEN substr(published_at, 6, 5) = '01-01' THEN substr(published_at, 1, 4)
+          WHEN substr(published_at, 9, 2) = '01' THEN substr(published_at, 1, 7)
+          ELSE substr(published_at, 1, 10)
+        END WHERE published_at IS NOT NULL;
+      `)
+      this.database.prepare('UPDATE subscriptions SET backfill_from_at = ?').run(cutoff())
     }
-    this.cleanup()
+    this.database.exec(`PRAGMA user_version = ${DATABASE_VERSION}`)
   }
 
   start(): void {
+    if (this.closed || this.timer) return
     void this.refreshDue()
     this.timer = setInterval(() => { void this.refreshDue() }, TIMER_INTERVAL_MS)
   }
 
   list(): FeedSubscription[] {
     return (this.database.prepare(`
-      SELECT s.*, count(CASE WHEN i.id IS NOT NULL AND i.read_at IS NULL THEN 1 END) unread_count
-      FROM subscriptions s LEFT JOIN items i ON i.subscription_id = s.id
+      SELECT s.*, count(i.id) unread_count
+      FROM subscriptions s LEFT JOIN items i
+        ON i.subscription_id = s.id AND i.read_at IS NULL AND i.discovered_at >= ?
       GROUP BY s.id ORDER BY lower(s.title), s.id
-    `).all() as Row[]).map((row) => this.subscription(row))
+    `).all(cutoff()) as Row[]).map((row) => this.subscription(row))
   }
 
   async searchJournals(request: JournalSearchRequest): Promise<JournalSearchResult> {
@@ -332,8 +413,9 @@ export class FeedService {
     const exactIssn = normalizeIssn(query)
     try {
       const journals = exactIssn
-        ? await fetchJournal(exactIssn).then((value) => value ? [value] : [])
+        ? await this.fetchJournal(exactIssn, this.shutdown.signal).then((value) => value ? [value] : [])
         : await this.searchJournalNames(query)
+      this.shutdown.signal.throwIfAborted()
       const subscribed = this.subscribedIssns()
       const seenIssns = new Set<string>()
       return {
@@ -353,60 +435,78 @@ export class FeedService {
   async add(request: AddFeedRequest): Promise<FeedSubscription> {
     const issn = normalizeIssn(request.issn)
     if (!issn) throw new Error('请输入有效的 ISSN。')
-    const journal = await fetchJournal(issn)
-    if (!journal) throw new Error('Crossref 中没有找到该期刊。')
-    const subscribed = this.subscribedIssns()
-    if (journal.issns.some((value) => subscribed.has(value))) throw new Error('该期刊已经添加。')
-    const id = `feed_${hash(journal.issn).slice(0, 24)}`
-    this.database.prepare(`
-      INSERT INTO subscriptions (id, issn, issns_json, title, publisher) VALUES (?, ?, ?, ?, ?)
-    `).run(id, journal.issn, JSON.stringify(journal.issns), request.title?.trim() || journal.displayName, journal.publisher ?? '')
+    this.shutdown.signal.throwIfAborted()
+    if (this.additions.has(request.requestId)) throw new Error('该添加请求正在处理。')
+    const abort = new AbortController()
+    this.additions.set(request.requestId, abort)
     try {
-      await this.refresh(id, 30)
+      this.assertNewJournal([issn])
+      const journal = await this.fetchJournal(issn, abort.signal)
+      if (!journal) throw new Error('Crossref 中没有找到该期刊。')
+      this.assertNewJournal(journal.issns)
+      const upperBound = now()
+      const backfillFrom = cutoff(30, Date.parse(upperBound))
+      const works = await this.fetchWorks(journal.issns, 'created', backfillFrom, upperBound, abort.signal)
+      abort.signal.throwIfAborted()
+      const id = `feed_${hash(journal.issn).slice(0, 24)}`
+      this.transaction(() => {
+        this.assertNewJournal(journal.issns)
+        this.database.prepare(`
+          INSERT INTO subscriptions (id, issn, issns_json, title, publisher, backfill_from_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(id, journal.issn, JSON.stringify(journal.issns), request.title?.trim() || journal.displayName,
+          journal.publisher ?? '', backfillFrom)
+        this.saveRefresh(id, works, upperBound)
+      })
+      this.emitChanged()
       return this.getSubscription(id)
-    } catch (error) {
-      this.database.prepare('DELETE FROM subscriptions WHERE id = ?').run(id)
-      throw error
+    } finally {
+      this.additions.delete(request.requestId)
+      this.finishCloseIfIdle()
     }
   }
 
+  cancelAdd(requestId: string): boolean {
+    const abort = this.additions.get(requestId)
+    if (!abort) return false
+    abort.abort(new Error('添加期刊已取消。'))
+    return true
+  }
+
+  private assertNewJournal(issns: string[]): void {
+    const subscribed = this.subscribedIssns()
+    if (issns.some((issn) => subscribed.has(issn))) throw new Error('该期刊已经添加。')
+  }
+
   remove(subscriptionId: string): void {
-    this.active.get(subscriptionId)?.abort()
+    this.active.get(subscriptionId)?.abort(refreshCancelled())
     this.database.prepare('DELETE FROM subscriptions WHERE id = ?').run(subscriptionId)
     this.emitChanged()
   }
 
-  async refresh(subscriptionId: string, initialDays?: 30): Promise<FeedSubscription> {
+  async refresh(subscriptionId: string): Promise<FeedSubscription> {
+    this.shutdown.signal.throwIfAborted()
     if (this.active.has(subscriptionId)) return this.getSubscription(subscriptionId)
     const row = this.database.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subscriptionId) as Row | undefined
     if (!row) throw new Error('期刊不存在。')
     const abort = new AbortController()
     this.active.set(subscriptionId, abort)
     try {
-      const startTimestamp = initialDays
-        ? Date.now() - initialDays * 24 * 60 * 60 * 1000
-        : Date.parse(stringValue(row.last_successful_at)) || Date.now() - 30 * 24 * 60 * 60 * 1000
-      const works = await this.fetchWorks(stringValue(row.issn), dateOnly(startTimestamp), dateOnly(Date.now()), abort.signal)
-      const checkedAt = now()
-      this.database.exec('BEGIN IMMEDIATE')
-      try {
-        for (const work of works) this.upsertItem(subscriptionId, work)
-        this.database.prepare(`
-          UPDATE subscriptions SET last_checked_at = ?, last_successful_at = ?, error = NULL WHERE id = ?
-        `).run(checkedAt, checkedAt, subscriptionId)
-        this.cleanup()
-        this.database.exec('COMMIT')
-      } catch (error) {
-        this.database.exec('ROLLBACK')
-        throw error
-      }
+      const checkpoint = stringValue(row.index_checkpoint_at)
+      const upperBound = now()
+      const works = await this.fetchWorks(this.subscriptionIssns(row), checkpoint ? 'index' : 'created',
+        checkpoint || stringValue(row.backfill_from_at) || cutoff(), upperBound, abort.signal)
+      abort.signal.throwIfAborted()
+      this.transaction(() => this.saveRefresh(subscriptionId, works, upperBound))
       this.emitChanged()
       return this.getSubscription(subscriptionId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.database.prepare('UPDATE subscriptions SET last_checked_at = ?, error = ? WHERE id = ?')
-        .run(now(), message.slice(0, 1_000), subscriptionId)
-      this.emitChanged()
+      if (!abort.signal.aborted) {
+        this.database.prepare('UPDATE subscriptions SET last_checked_at = ?, error = ? WHERE id = ?')
+          .run(now(), message.slice(0, 1_000), subscriptionId)
+        this.emitChanged()
+      }
       throw new Error(message)
     } finally {
       this.active.delete(subscriptionId)
@@ -416,8 +516,7 @@ export class FeedService {
 
   items(request: FeedItemsRequest): FeedItemsResult {
     const clauses = ['i.discovered_at >= ?']
-    const days = request.days ?? 7
-    const values: Array<string | number> = [new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()]
+    const values: Array<string | number> = [cutoff(request.days ?? 7)]
     if (request.subscriptionId) {
       clauses.push('i.subscription_id = ?')
       values.push(request.subscriptionId)
@@ -452,27 +551,36 @@ export class FeedService {
     this.closed = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    for (const abort of this.active.values()) abort.abort()
-    if (this.active.size === 0) {
-      this.finishCloseIfIdle()
-      return
-    }
+    this.shutdown.abort(refreshCancelled())
+    for (const abort of this.active.values()) abort.abort(refreshCancelled())
+    for (const requestId of this.additions.keys()) this.cancelAdd(requestId)
+    this.finishCloseIfIdle()
+    if (this.databaseClosed) return
     await new Promise<void>((resolve) => this.closeWaiters.add(resolve))
   }
 
   private finishCloseIfIdle(): void {
-    if (!this.closed || this.active.size > 0 || this.databaseClosed) return
+    if (!this.closed || this.active.size > 0 || this.additions.size > 0 || this.databaseClosed) return
     this.databaseClosed = true
     this.database.close()
     for (const resolve of this.closeWaiters) resolve()
     this.closeWaiters.clear()
   }
 
+  private async fetchJournal(issn: string, signal: AbortSignal): Promise<JournalCandidate | null> {
+    const value = await this.crossref.request(`/journals/${encodeURIComponent(issn)}`, signal, true)
+    if (value === null) return null
+    try {
+      return candidate(crossrefJournalResultSchema.parse(value).message, issn)
+    } catch (error) {
+      if (error instanceof z.ZodError) throw new Error('Crossref 返回了无法识别的数据。')
+      throw error
+    }
+  }
+
   private async searchJournalNames(query: string): Promise<JournalCandidate[]> {
-    const url = new URL('/journals', CROSSREF_ORIGIN)
-    url.searchParams.set('query', query)
-    url.searchParams.set('rows', '100')
-    const value = crossrefJournalListSchema.parse(await requestCrossref(`${url.pathname}${url.search}`))
+    const params = new URLSearchParams({ query, rows: '100' })
+    const value = crossrefJournalListSchema.parse(await this.crossref.request(`/journals?${params}`, this.shutdown.signal))
     const exactTitle = query.toLowerCase()
     return value.message.items
       .filter((journal): journal is CrossrefJournal => journal.ISSN.length > 0)
@@ -481,52 +589,65 @@ export class FeedService {
         Number(right.displayName.toLowerCase() === exactTitle) - Number(left.displayName.toLowerCase() === exactTitle))
   }
 
-  private async fetchWorks(issn: string, fromDate: string, untilDate: string, signal: AbortSignal): Promise<ParsedWork[]> {
-    const works: ParsedWork[] = []
+  private async fetchWorks(
+    issns: string[], dateType: 'created' | 'index', fromDate: string, untilDate: string, signal: AbortSignal
+  ): Promise<Map<string, ParsedWork>> {
+    // Crossref interprets these timestamps as UTC and accepts seconds without a time zone suffix.
+    const filter = [
+      ...issns.map((issn) => `issn:${issn}`),
+      `from-${dateType}-date:${fromDate.slice(0, 19)}`,
+      `until-${dateType}-date:${untilDate.slice(0, 19)}`,
+      'type:journal-article'
+    ].join(',')
+    const works = new Map<string, ParsedWork>()
     const cursors = new Set<string>()
     let cursor = '*'
     while (true) {
       if (cursors.has(cursor)) throw new Error('Crossref 返回了重复的分页游标。')
       cursors.add(cursor)
-      const url = new URL(`/journals/${encodeURIComponent(issn)}/works`, CROSSREF_ORIGIN)
-      url.searchParams.set('filter', `from-created-date:${fromDate},until-created-date:${untilDate},type:journal-article`)
-      url.searchParams.set('rows', String(WORK_PAGE_SIZE))
-      url.searchParams.set('cursor', cursor)
+      const params = new URLSearchParams({ filter, rows: String(WORK_PAGE_SIZE), cursor })
       let page: z.infer<typeof crossrefWorksResultSchema>
       try {
-        page = crossrefWorksResultSchema.parse(await requestCrossref(`${url.pathname}${url.search}`, signal))
+        page = crossrefWorksResultSchema.parse(await this.crossref.request(`/works?${params}`, signal))
       } catch (error) {
         if (error instanceof z.ZodError) throw new Error('Crossref 返回了无法识别的数据。')
         throw error
       }
-      works.push(...page.message.items.map(parseWork))
-      if (page.message.items.length === 0 || page.message.items.length < WORK_PAGE_SIZE || !page.message['next-cursor']) break
+      for (const item of page.message.items) {
+        const work = parseWork(item)
+        works.set(work.doi, work)
+      }
+      if (page.message.items.length < WORK_PAGE_SIZE || !page.message['next-cursor']) break
       cursor = page.message['next-cursor']
     }
     return works
   }
 
+  private subscriptionIssns(row: Row): string[] {
+    const primary = stringValue(row.issn)
+    try {
+      const saved = z.array(crossrefIssnSchema).parse(JSON.parse(stringValue(row.issns_json)))
+      return [...new Set([...saved, primary])]
+    } catch {
+      return [primary]
+    }
+  }
+
   private subscribedIssns(): Set<string> {
     const result = new Set<string>()
     for (const row of this.database.prepare('SELECT issn, issns_json FROM subscriptions').all() as Row[]) {
-      result.add(stringValue(row.issn))
-      try {
-        for (const value of JSON.parse(stringValue(row.issns_json)) as unknown[]) {
-          if (typeof value === 'string') result.add(value)
-        }
-      } catch {
-        // The primary ISSN still protects duplicate additions if stored JSON is damaged.
-      }
+      for (const issn of this.subscriptionIssns(row)) result.add(issn)
     }
     return result
   }
 
   private async refreshDue(): Promise<void> {
     if (this.closed) return
-    const cutoff = new Date(Date.now() - REFRESH_AFTER_MS).toISOString()
+    const dueBefore = new Date(Date.now() - REFRESH_AFTER_MS).toISOString()
     const ids = (this.database.prepare(`
-      SELECT id FROM subscriptions WHERE last_checked_at IS NULL OR last_checked_at < ? ORDER BY last_checked_at
-    `).all(cutoff) as Row[]).map((row) => stringValue(row.id))
+      SELECT id FROM subscriptions WHERE index_checkpoint_at IS NULL OR error IS NOT NULL OR last_successful_at <= ?
+      ORDER BY last_checked_at, id
+    `).all(dueBefore) as Row[]).map((row) => stringValue(row.id))
     let cursor = 0
     await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
       while (!this.closed) {
@@ -535,6 +656,27 @@ export class FeedService {
         await this.refresh(id).catch(() => undefined)
       }
     }))
+  }
+
+  private transaction(write: () => void): void {
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      write()
+      this.database.exec('COMMIT')
+    } catch (error) {
+      this.database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  private saveRefresh(id: string, works: Map<string, ParsedWork>, upperBound: string): void {
+    for (const work of works.values()) this.upsertItem(id, work)
+    const checkedAt = now()
+    this.database.prepare(`
+      UPDATE subscriptions SET last_checked_at = ?, last_successful_at = ?, index_checkpoint_at = ?, error = NULL
+      WHERE id = ?
+    `).run(checkedAt, checkedAt, `${upperBound.slice(0, 19)}.000Z`, id)
+    this.cleanup()
   }
 
   private upsertItem(subscriptionId: string, work: ParsedWork): void {
@@ -553,15 +695,16 @@ export class FeedService {
   }
 
   private cleanup(): void {
-    this.database.prepare('DELETE FROM items WHERE discovered_at < ?')
-      .run(new Date(Date.now() - RETENTION_MS).toISOString())
+    this.database.prepare('DELETE FROM items WHERE discovered_at < ?').run(cutoff())
   }
 
   private getSubscription(id: string): FeedSubscription {
     const row = this.database.prepare(`
-      SELECT s.*, count(CASE WHEN i.id IS NOT NULL AND i.read_at IS NULL THEN 1 END) unread_count
-      FROM subscriptions s LEFT JOIN items i ON i.subscription_id = s.id WHERE s.id = ? GROUP BY s.id
-    `).get(id) as Row | undefined
+      SELECT s.*, count(i.id) unread_count
+      FROM subscriptions s LEFT JOIN items i
+        ON i.subscription_id = s.id AND i.read_at IS NULL AND i.discovered_at >= ?
+      WHERE s.id = ? GROUP BY s.id
+    `).get(cutoff(), id) as Row | undefined
     if (!row) throw new Error('期刊不存在。')
     return this.subscription(row)
   }
@@ -570,6 +713,7 @@ export class FeedService {
     return {
       id: stringValue(row.id),
       issn: stringValue(row.issn),
+      issns: this.subscriptionIssns(row),
       title: stringValue(row.title),
       unreadCount: numberValue(row.unread_count),
       lastCheckedAt: stringValue(row.last_checked_at) || null,

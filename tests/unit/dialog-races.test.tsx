@@ -17,7 +17,7 @@ import { AddFeedDialog } from '../../src/renderer/src/FeedInbox.js'
 import { LibraryTable } from '../../src/renderer/src/LibraryTable.js'
 import { ProjectDialog } from '../../src/renderer/src/ProjectDialog.js'
 import { defaultLibraryPreferences } from '../../src/renderer/src/library-preferences.js'
-import { itemFor } from '../../src/service/fetch-record.js'
+import { itemFor, parseTerminalRecord, projectRecord } from '../../src/service/fetch-record.js'
 import { transportFor } from '../renderer-transport.js'
 
 function deferred<T>() {
@@ -442,4 +442,29 @@ it('shows unscheduled counts and copies only the structured auth command', async
   const continueButton = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('继续未完成项'))!
   await act(async () => continueButton.click())
   expect(resume).toHaveBeenCalled()
+})
+
+it('shows formula and table counts in task details for both manifest versions', async () => {
+  const selectedProject = project('project_aaaaaaaaaaaaaaaaaaaaaaaa', 'Content quality')
+  const selected = run('run_cccccccccccccccccccccccc', selectedProject.id, '2026-09-02T02:00:00.000Z')
+  const records = [
+    { schema_version: 2, semantic_losses: { formula_fallback_count: 1, table_fallback_count: 2 } },
+    { schema_version: 3, acceptance: { content: { semantic_losses: {
+      formula_missing_count: 3, table_layout_degraded_count: 4, table_semantic_loss_count: 5
+    } } } }
+  ]
+  selected.items = records.map((value, index) => {
+    const item = itemFor(index + 1, `Paper ${index + 1}`)
+    projectRecord(item, parseTerminalRecord(value, item.index)!)
+    return { ...item, stage: 'terminal', state: 'degraded' }
+  })
+  window.litroot = transportFor({ fetch: { list: async () => [selected] } } as unknown as LitRootBridge)
+  await act(async () => root.render(<AddPapersDialog open project={selectedProject} event={null} onClose={vi.fn()} onOpenPaper={vi.fn()} />))
+  const [legacy, current] = container.querySelectorAll<HTMLDetailsElement>('.fetch-item details')
+  await act(async () => {
+    legacy!.querySelector('summary')!.click()
+    current!.querySelector('summary')!.click()
+  })
+  expect(legacy?.textContent).toContain('内容质量：表格回退 2；公式回退 1')
+  expect(current?.textContent).toContain('内容质量：表格布局降级 4；表格语义损失 5；公式缺失 3')
 })

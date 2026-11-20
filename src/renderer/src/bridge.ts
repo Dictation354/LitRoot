@@ -77,6 +77,7 @@ function facade(transport: LitRootTransportBridge): LitRootBridge {
       list: () => value(transport.feeds.list()),
       searchJournals: (request) => value(transport.feeds.searchJournals(request)),
       add: (request) => value(transport.feeds.add(request)),
+      cancelAdd: (requestId) => value(transport.feeds.cancelAdd(requestId)),
       remove: (subscriptionId) => complete(transport.feeds.remove(subscriptionId)),
       refresh: (subscriptionId) => value(transport.feeds.refresh(subscriptionId)),
       items: (request) => value(transport.feeds.items(request)),

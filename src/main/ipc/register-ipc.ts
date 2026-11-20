@@ -9,6 +9,7 @@ import {
   type BridgeResult,
   createFetchRunRequestSchema,
   addFeedRequestSchema,
+  feedAddRequestIdSchema,
   feedItemsRequestSchema,
   IPC,
   metadataUpdateRequestSchema,
@@ -195,6 +196,8 @@ export function registerIpc(
     controller.searchJournals(journalSearchRequestSchema.parse(value))))
   ipcMain.handle(IPC.feedsAdd, trusted((_event, value) =>
     controller.addFeed(addFeedRequestSchema.parse(value))))
+  ipcMain.handle(IPC.feedsCancelAdd, trusted((_event, value) =>
+    controller.cancelAddFeed(feedAddRequestIdSchema.parse(value))))
   ipcMain.handle(IPC.feedsRemove, trusted((_event, subscriptionId) =>
     controller.removeFeed(feedIdentifier.parse(subscriptionId))))
   ipcMain.handle(IPC.feedsRefresh, trusted((_event, subscriptionId) =>

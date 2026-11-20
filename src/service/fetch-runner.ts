@@ -20,6 +20,7 @@ import { doiFromInput, sha256 } from './identity.js'
 import { errorMessage, LitRootError } from './errors.js'
 import { normalizePaperFetchCommand, paperFetchEnvironment, type PaperFetchCommand } from './paper-fetch-command.js'
 import {
+  isReceipt,
   itemFor,
   authenticationRequired,
   parseJsonLines,
@@ -308,21 +309,7 @@ export class PaperFetchRunner {
     if (batch) {
       await this.applyBatchRecords(run, files, activeIndexes, result)
     } else if (run.items[(activeIndexes[0] ?? 1) - 1]?.stage !== 'terminal') {
-      const values = [
-        ...parseJsonLines(result.stdout),
-        ...await this.readManifestValues(files.paperFetchManifest)
-      ]
-      let record = values.map((value) => parseTerminalRecord(value, 1)).findLast(Boolean)
-      if (record?.raw.contract === 'paper-fetch/receipt' && record.raw.schema_version === 1 &&
-        typeof record.raw.manifest_path === 'string') {
-        const manifest = await canonicalFileInside(files.temporaryDirectory, record.raw.manifest_path)
-        if (manifest) {
-          const detailed = (await this.readManifestValues(manifest))
-            .map((value) => parseTerminalRecord(value, 1))
-            .findLast((value) => value?.raw.schema_version === 2 && value.index === record?.index)
-          record = detailed ?? record
-        }
-      }
+      const record = await this.readSingleRecord(files, result.stdout)
       await this.acceptRecord(
         run,
         activeIndexes[0] ?? 1,
@@ -601,6 +588,27 @@ export class PaperFetchRunner {
     } catch {
       return []
     }
+  }
+
+  private async readSingleRecord(files: RunFiles, stdout: string): Promise<ParsedTerminalRecord | null> {
+    const explicit = (await this.readManifestValues(files.paperFetchManifest)).map((value) => parseTerminalRecord(value)).findLast(Boolean)
+    if (explicit) return explicit
+
+    const record = parseJsonLines(stdout).map((value) => parseTerminalRecord(value)).findLast(Boolean)
+    if (!record || !isReceipt(record.raw) || typeof record.raw.manifest_path !== 'string') return record ?? null
+
+    const manifest = await canonicalFileInside(files.temporaryDirectory, record.raw.manifest_path)
+    if (!manifest) return record
+
+    const detailed = (await this.readManifestValues(manifest))
+      .map((value) => parseTerminalRecord(value))
+      .findLast((value) => {
+        if (!value || value.raw.index !== record.index) return false
+        const { schema_version, record_status } = value.raw
+        return (schema_version === 2 || schema_version === 3) &&
+          (record_status === 'completed' || record_status === 'failed' || record_status === 'aborted')
+      })
+    return detailed ?? record
   }
 
   private async failRun(run: FetchRun, error: unknown): Promise<void> {

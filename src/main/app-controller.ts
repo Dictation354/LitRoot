@@ -280,6 +280,7 @@ export class AppController {
   }
 
   addFeed(request: AddFeedRequest) { return this.feeds.add(request) }
+  cancelAddFeed(requestId: string) { return this.feeds.cancelAdd(requestId) }
   searchJournals(request: JournalSearchRequest) { return this.feeds.searchJournals(request) }
   listFeeds() { return this.feeds.list() }
   removeFeed(subscriptionId: string) { return this.feeds.remove(subscriptionId) }

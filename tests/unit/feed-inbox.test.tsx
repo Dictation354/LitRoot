@@ -18,6 +18,7 @@ import { transportFor } from '../renderer-transport.js'
 const subscription: FeedSubscription = {
   id: 'feed_aaaaaaaaaaaaaaaaaaaaaaaa',
   issn: '0034-4257',
+  issns: ['0034-4257', '1879-0704'],
   title: 'Example Journal',
   unreadCount: 2,
   lastCheckedAt: null,
@@ -29,7 +30,7 @@ const items: FeedItem[] = [
   {
     id: 'feeditem_bbbbbbbbbbbbbbbbbbbbbbbb', subscriptionId: subscription.id,
     sourceTitle: subscription.title, title: 'DOI paper', authors: ['One'], summary: 'First',
-    doi: '10.1234/first', url: 'https://example.org/first', publishedAt: '2026-09-01T00:00:00.000Z',
+    doi: '10.1234/first', url: 'https://example.org/first', publishedAt: '2026-09-01',
     discoveredAt: '2026-09-01T00:00:00.000Z', readAt: null
   },
   {
@@ -171,6 +172,73 @@ describe('Feed inbox', () => {
     expect(container.textContent).toContain('已选 50/50')
   })
 
+  it.each(['journal', 'range', 'page', 'page size'])('blocks old selections while changing the %s', async (filter) => {
+    let resolveOld!: (result: FeedItemsResult) => void
+    let resolveNew!: (result: FeedItemsResult) => void
+    const old = new Promise<FeedItemsResult>((resolve) => { resolveOld = resolve })
+    const next = new Promise<FeedItemsResult>((resolve) => { resolveNew = resolve })
+    const create = vi.fn(async () => ({ id: 'run_new' }))
+    const requestItems = vi.fn()
+      .mockResolvedValueOnce({ items, total: 51 })
+      .mockReturnValueOnce(old)
+      .mockReturnValueOnce(next)
+    window.litroot = transportFor({
+      feeds: { items: requestItems, markRead: vi.fn(async () => undefined) }, fetch: { create }
+    } as unknown as LitRootBridge)
+    const onMessage = vi.fn()
+    const onFetchCreated = vi.fn()
+    const event = { type: 'feeds.changed', at: '2026-09-07T00:00:00Z' } as const
+    const render = (scope: string, change: typeof event | null) => <FeedInbox scope={scope}
+      feeds={[subscription]} projects={projects} event={change} onMessage={onMessage} onFetchCreated={onFetchCreated} />
+    await act(async () => root.render(render('recent', null)))
+    const oldRow = container.querySelector<HTMLElement>('.feed-row')!
+    const submit = [...container.querySelectorAll('button')].find((button) => button.textContent === '添加到项目')!
+    await act(async () => oldRow.click())
+    expect(submit.disabled).toBe(false)
+    await act(async () => root.render(render('recent', event)))
+    await act(async () => {
+      if (filter === 'journal') root.render(render(subscription.id, event))
+      else if (filter === 'page') container.querySelectorAll<HTMLButtonElement>('.library-footer button')[1]!.click()
+      else {
+        const select = container.querySelector<HTMLSelectElement>(`select[aria-label="${filter === 'range' ? '登记时间范围' : '每页条数'}"]`)!
+        select.value = filter === 'range' ? '90' : '20'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    })
+    expect(requestItems).toHaveBeenCalledTimes(3)
+    expect(container.querySelector('.feed-list')?.getAttribute('aria-busy')).toBe('true')
+    expect(submit.disabled).toBe(true)
+    await act(async () => { oldRow.click(); submit.click(); resolveOld({ items, total: 51 }) })
+    expect(create).not.toHaveBeenCalled()
+    expect(container.querySelector('.feed-row')).toBeNull()
+    expect(submit.disabled).toBe(true)
+
+    const newItem = { ...items[0]!, title: 'New result', doi: '10.1234/new' }
+    await act(async () => resolveNew({ items: [newItem], total: 51 }))
+    expect(container.querySelector('.feed-row')?.textContent).toContain('New result')
+    expect(container.querySelector<HTMLInputElement>('.feed-row input')?.checked).toBe(false)
+    expect(submit.disabled).toBe(true)
+    await act(async () => container.querySelector<HTMLElement>('.feed-row')!.click())
+    await act(async () => submit.click())
+    expect(create).toHaveBeenCalledExactlyOnceWith({ projectId: projects[0]!.id, inputs: ['10.1234/new'], concurrency: 4 })
+  })
+
+  it('renders calendar days and partial dates at their original precision in list and detail', async () => {
+    const publishedDates = ['2026-09-01', '2026-09', '2026', null]
+    const expected = ['2026年9月1日', '2026年9月', '2026年', '日期未知']
+    const dated = publishedDates.map((publishedAt, index) => ({ ...items[0]!, id: String(index), publishedAt }))
+    window.litroot = transportFor({ feeds: {
+      items: vi.fn(async () => ({ items: dated, total: dated.length })), markRead: vi.fn(async () => undefined)
+    } } as unknown as LitRootBridge)
+    await act(async () => root.render(<FeedInbox scope="recent" feeds={[]} projects={[]} event={null}
+      onFetchCreated={vi.fn()} onMessage={vi.fn()} />))
+    expect([...container.querySelectorAll('.feed-row time')].map((time) => time.textContent)).toEqual(expected)
+    for (const [index, row] of [...container.querySelectorAll<HTMLElement>('.feed-row')].entries()) {
+      await act(async () => row.click())
+      expect(container.querySelector('.feed-detail-meta time')?.textContent).toBe(expected[index])
+    }
+  })
+
   it('continues pagination when preference reads and writes fail', async () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('unavailable') })
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('unavailable') })
@@ -310,8 +378,60 @@ describe('Add journal dialog', () => {
     const result = container.querySelector<HTMLButtonElement>('.journal-result')
     await act(async () => result?.click())
     await settle()
-    expect(add).toHaveBeenCalledWith({ issn: candidate.issn, title: candidate.displayName })
+    expect(add).toHaveBeenCalledWith({ requestId: expect.stringMatching(/^[\da-f-]{36}$/), issn: candidate.issn, title: candidate.displayName })
     expect(onAdded).toHaveBeenCalledWith(subscription)
+  })
+
+  it.each(['取消', '关闭', 'Escape'])('waits for cancellation of a delayed addition through %s', async (method) => {
+    let rejectAdd!: (error: Error) => void
+    let confirmCancel!: (cancelled: boolean) => void
+    const add = vi.fn(() => new Promise<FeedSubscription>((_resolve, reject) => { rejectAdd = reject }))
+    const cancelAdd = vi.fn((_requestId: string) => new Promise<boolean>((resolve) => { confirmCancel = resolve }))
+    const onAdded = vi.fn()
+    const onClose = vi.fn()
+    window.litroot = transportFor({ feeds: {
+      searchJournals: vi.fn(async () => ({ candidates: [candidate] })), add, cancelAdd
+    } } as unknown as LitRootBridge)
+    await act(async () => root.render(<AddFeedDialog open onClose={onClose} onAdded={onAdded} />))
+    await enter(container.querySelector<HTMLInputElement>('input')!, 'Useful Tests')
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === '搜索期刊')!.click())
+    await act(async () => container.querySelector<HTMLButtonElement>('.journal-result')!.click())
+    await act(async () => {
+      if (method === 'Escape') container.querySelector('dialog')!.dispatchEvent(new Event('cancel', { cancelable: true }))
+      else [...container.querySelectorAll('button')].find((button) => (
+        button.textContent === method || button.getAttribute('aria-label') === method
+      ))!.click()
+    })
+    expect(cancelAdd).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^[\da-f-]{36}$/))
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ requestId: cancelAdd.mock.lastCall?.[0] }))
+    expect(onClose).not.toHaveBeenCalled()
+    await act(async () => rejectAdd(new Error('添加期刊已取消。')))
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    await act(async () => confirmCancel(true))
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onAdded).not.toHaveBeenCalled()
+  })
+
+  it('reports successful addition when the commit wins the cancellation race', async () => {
+    let deliver!: (feed: FeedSubscription) => void
+    const add = vi.fn(() => new Promise<FeedSubscription>((resolve) => { deliver = resolve }))
+    const cancelAdd = vi.fn(async () => false)
+    const onAdded = vi.fn()
+    const onClose = vi.fn()
+    window.litroot = transportFor({ feeds: {
+      searchJournals: vi.fn(async () => ({ candidates: [candidate] })), add, cancelAdd
+    } } as unknown as LitRootBridge)
+    await act(async () => root.render(<AddFeedDialog open onClose={onClose} onAdded={onAdded} />))
+    await enter(container.querySelector<HTMLInputElement>('input')!, 'Useful Tests')
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === '搜索期刊')!.click())
+    await act(async () => container.querySelector<HTMLButtonElement>('.journal-result')!.click())
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')!.click())
+    expect(onClose).not.toHaveBeenCalled()
+    await act(async () => deliver(subscription))
+    expect(onAdded).toHaveBeenCalledExactlyOnceWith(subscription)
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('treats URL-like text only as a Crossref journal search and never adds it directly', async () => {

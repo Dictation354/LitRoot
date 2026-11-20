@@ -295,6 +295,7 @@ textarea { resize: vertical; line-height: 1.55; }
 .feed-sidebar-entry:hover:not(:disabled) { border: 0; background: rgb(255 255 255 / 45%); }
 .feed-sidebar-entry.selected { background: #d4dfd8; box-shadow: inset 3px 0 var(--green); }
 .feed-sidebar-entry strong { min-width: 23px; padding: 2px 6px; border-radius: 99px; background: rgb(255 255 255 / 56%); font-size: 12px; text-align: center; }
+.feed-unread-scope { display: block; margin-top: 2px; color: #64756a; font-size: 11px; }
 .feed-source-entry { margin-top: 2px; }
 .project-list { min-height: 0; overflow: auto; padding: 2px 8px 12px; }
 .project-entry { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 27px; border-radius: 6px; }

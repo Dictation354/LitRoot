@@ -77,13 +77,17 @@ function candidates(value: unknown): IdentityCandidate[] {
   }).slice(0, 20)
 }
 
+export function isReceipt(value: UnknownRecord): boolean {
+  return value.contract === 'paper-fetch/receipt' && (value.schema_version === 1 || value.schema_version === 2)
+}
+
 export function parseTerminalRecord(
   value: unknown,
   fallbackIndex = 1,
   batch = false
 ): ParsedTerminalRecord | null {
   if (!isRecord(value)) return null
-  const receipt = value.contract === 'paper-fetch/receipt' && value.schema_version === 1
+  const receipt = isReceipt(value)
   const acceptanceRecord = nested(value, 'acceptance')
   const identityRecord = receipt ? nested(value, 'identity') : nested(acceptanceRecord, 'identity')
   const contentRecord = nested(acceptanceRecord, 'content')
@@ -101,14 +105,16 @@ export function parseTerminalRecord(
     value.record_status === 'completed' ? 'ok' : text(value.record_status) ?? 'unknown'
   )
   const errorStatus = text(errorRecord.status)
-  const errorCode = text(errorRecord.code) ?? (
+  const explicitErrorCode = text(errorRecord.code)
+  const errorCode = explicitErrorCode ?? (
     errorStatus && !['ok', 'success', 'complete', 'completed', 'error', 'failed', 'aborted', 'unknown'].includes(errorStatus)
       ? errorStatus : null
   ) ?? text(errorRecord.error_category ?? value.code ?? value.error_category)
   if (value.record_status === 'aborted' || status === 'aborted') {
     status = errorCode === 'request_cancelled' ? 'cancelled' : (
-      batch && value.schema_version === 2 && supportedPaperFetchVersion(`paper-fetch ${String(value.tool_version)}`) &&
-      errorStatus === 'aborted' && text(errorRecord.code) && !['unknown', 'aborted'].includes(String(errorRecord.code)) && text(errorRecord.reason) &&
+      batch && (value.schema_version === 2 || value.schema_version === 3) &&
+      supportedPaperFetchVersion(`paper-fetch ${String(value.tool_version)}`) &&
+      errorStatus === 'aborted' && explicitErrorCode && !['unknown', 'aborted'].includes(explicitErrorCode) && text(errorRecord.reason) &&
       text(value.started_at) !== null && value.started_at === value.completed_at
         ? 'not_scheduled' : 'failed'
     )
@@ -119,7 +125,7 @@ export function parseTerminalRecord(
     Array.isArray(entry) ? entry.flatMap((code) => text(code) ? [text(code)!] : []) : []
   )))]
   const diagnostics: FetchDiagnostics | null = [
-    'acceptance', 'acquisition', 'trace', 'failure_codes', 'fallback_codes', 'warning_codes', 'error'
+    'acceptance', 'acquisition', 'trace', 'failure_codes', 'fallback_codes', 'warning_codes', 'error', 'semantic_losses'
   ].some((key) => value[key] != null) ? {
     acquisition: object(value.acquisition) ?? object(provenance.acquisition),
     acceptance: {
@@ -134,7 +140,7 @@ export function parseTerminalRecord(
     retryAfterSeconds: typeof errorRecord.retry_after_seconds === 'number' &&
       Number.isFinite(errorRecord.retry_after_seconds) && errorRecord.retry_after_seconds >= 0
       ? errorRecord.retry_after_seconds : null,
-    semanticLosses: object(value.semantic_losses),
+    semanticLosses: object(contentRecord.semantic_losses) ?? object(value.semantic_losses),
     assetSummary: object(value.asset_summary) ?? object(acceptanceRecord.asset) ??
       (receipt ? object(acceptanceRecord.asset_summary) : null),
     trace: Array.isArray(value.trace) ? value.trace.filter(isRecord).map((event) => ({
@@ -168,9 +174,8 @@ export function parseTerminalRecord(
     contentKind: contentKind(
       contentRecord.kind ?? contentRecord.content_kind ?? value.content_kind ?? contentRecord.status
     ),
-    outputPath: text(
-      value.output_path ?? value.saved_markdown_path ?? outputRecord.path ?? artifact.path ??
-      receiptOutput ?? (receipt ? value.body_path : null)
+    outputPath: receipt ? receiptOutput ?? text(value.body_path) : text(
+      value.output_path ?? value.saved_markdown_path ?? outputRecord.path ?? artifact.path
     ),
     outputSha256: text(
       value.output_sha256 ?? value.sha256 ?? outputRecord.sha256 ?? artifact.sha256

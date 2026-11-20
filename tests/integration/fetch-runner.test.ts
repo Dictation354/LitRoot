@@ -71,32 +71,44 @@ afterEach(async () => {
 })
 
 describe('paper-fetch task orchestration', () => {
-  it.each(['manifest', 'paths', 'body', 'bad-hash'])('recovers a single result from a CLI receipt (%s)', async (mode) => {
+  it.each([
+    [1, 'manifest'], [1, 'paths'], [1, 'body'], [1, 'bad-hash'],
+    [2, 'manifest'], [2, 'paths'], [2, 'body'], [2, 'bad-hash'],
+    [2, 'wrong-index'], [2, 'missing-index'], [2, 'outside-staging'], [2, 'explicit'], [2, 'terminal']
+  ])('recovers a single result from a CLI receipt v%i (%s)', async (schemaVersion, mode) => {
     const { project, executable } = await fixture(true)
     const script = await readFile(executable, 'utf8')
     await writeFile(executable, script.replace(
       '  if (manifest) await writeFile(manifest, JSON.stringify(result))',
       `  const mode = ${JSON.stringify(mode)}
+  const schemaVersion = ${schemaVersion}
   const readingDir = join(outputDir, '.paper-fetch-results', runId, '1')
   await mkdir(readingDir, { recursive: true })
   const body = join(readingDir, 'body.md')
   await writeFile(body, await readFile(artifact.path))
-  const detailedManifest = join(readingDir, 'manifest.json')
-  if (mode === 'manifest' || mode === 'bad-hash') {
-    const detailed = mode === 'bad-hash' ? { ...result, output_artifacts: [{ ...artifact, sha256: '0'.repeat(64) }] } : result
+  const detailedManifest = mode === 'outside-staging' ? join(outputDir, '..', 'manifest.json') : join(readingDir, 'manifest.json')
+  if (mode !== 'paths' && mode !== 'body') {
+    const badHash = ['bad-hash', 'explicit', 'terminal', 'wrong-index', 'missing-index', 'outside-staging'].includes(mode)
+    const detailed = {
+      ...result, schema_version: schemaVersion + 1,
+      index: mode === 'wrong-index' ? 2 : mode === 'missing-index' ? undefined : result.index,
+      output_artifacts: [{ ...artifact, sha256: badHash ? '0'.repeat(64) : artifact.sha256 }]
+    }
     await writeFile(detailedManifest, JSON.stringify(detailed))
   }
+  if (mode === 'explicit') await writeFile(manifest, JSON.stringify({ ...result, schema_version: 3, source: 'explicit_manifest' }))
+  if (mode === 'terminal') await writeFile(manifest, JSON.stringify({ ...result, output_artifacts: [{ ...artifact, sha256: '0'.repeat(64) }] }))
   const receipt = {
-    schema_version: 1, contract: 'paper-fetch/receipt', index: 1, status: 'completed',
+    schema_version: schemaVersion, contract: 'paper-fetch/receipt', index: 1, status: 'completed',
     identity: { doi: result.doi, title: 'Receipt paper' }, error: null,
     acceptance: { overall: 'complete', identity: 'resolved', content: 'fulltext' }, content_kind: 'fulltext',
     manifest_path: detailedManifest, body_path: body,
-    output_paths: mode === 'body' ? [] : [join(outputDir, 'paper.json'), mode === 'manifest' ? join(outputDir, 'missing.md') : artifact.path]
+    output_paths: mode === 'body' ? [join(outputDir, 'paper.json')] : [join(outputDir, 'paper.json'), mode === 'manifest' ? join(outputDir, 'missing.md') : artifact.path]
   }`
     ).replace('  console.log(JSON.stringify(result))', '  console.log(JSON.stringify(receipt))'))
     try {
       const created = await project.fetch.create({ projectId: project.layout.id,
-        inputs: ['10.4242/existing', 'missing event receipt'] })
+        inputs: ['10.4242/existing', mode === 'terminal' ? 'terminal receipt' : 'missing event receipt'] })
       const done = await terminal(project, created.id)
       expect(done.executionIndexes).toEqual([2])
       expect(done.items[0]?.state).toBe('action_required')
@@ -105,10 +117,47 @@ describe('paper-fetch task orchestration', () => {
         expect(item).toMatchObject({ state: 'failed', errorCode: 'output_hash_mismatch' })
         expect(project.summary().paperCount).toBe(1)
       } else {
-        expect(item).toMatchObject({ stage: 'terminal', state: 'complete', completionOrder: null })
+        expect(item).toMatchObject({ stage: 'terminal', state: 'complete', completionOrder: mode === 'terminal' ? 1 : null })
+        if (mode === 'explicit') expect(item.source).toBe('explicit_manifest')
         expect(item.outputPath).toBe(join(project.layout.papers, mode === 'body' ? 'body.md' : 'FetchBot_2025_Fetched_paper_1.md'))
         expect(await readFile(item.outputPath!, 'utf8')).toContain('Complete fake full text body.')
         expect(project.summary()).toMatchObject({ paperCount: 2, issueCount: 0 })
+      }
+    } finally { await project.close() }
+  })
+
+  it('preserves schema-v3 rate limits for both terminal events and final JSONL', async () => {
+    const { project, executable } = await fixture()
+    const timestamp = '2026-11-20T01:00:00Z'
+    const unscheduledReason = 'Item was not scheduled because its provider/resource lane was rate limited.'
+    const records = [1, 2, 3].map((index) => ({
+      schema_version: 3, tool_version: '8.0.0', index, attempt: 1,
+      record_status: index === 1 ? 'failed' : 'aborted',
+      started_at: timestamp,
+      completed_at: index === 1 ? '2026-11-20T01:00:01Z' : timestamp,
+      acceptance: { overall: 'action_required' },
+      error: index === 1
+        ? { status: 'rate_limited', reason: 'Slow down.', retry_after_seconds: 7 }
+        : { status: 'aborted', code: 'rate_limited', reason: unscheduledReason, retry_after_seconds: 7 }
+    }))
+    try {
+      const script = await readFile(executable, 'utf8')
+      await writeFile(executable, script.replace('paper-fetch 7.0.1', 'paper-fetch 8.0.0').replace(
+        "event('run_started', 0, { total: queries.length })",
+        `event('run_started', 0, { total: queries.length })
+const rateLimits = ${JSON.stringify(records)}.map((record) => ({ ...record, run_id: runId }))
+for (const record of rateLimits.slice(0, 2)) event('terminal', record.index, { record })
+await writeFile(value('--batch-results'), rateLimits.map((record) => JSON.stringify(record)).join('\\n') + '\\n')
+process.exit(1)`
+      ))
+      const created = await project.fetch.create({ projectId: project.layout.id,
+        inputs: ['rate trigger', 'queued with event', 'queued without event'], concurrency: 1 })
+      const done = await terminal(project, created.id)
+      expect(done.items.map((item) => item.state)).toEqual(['action_required', 'not_scheduled', 'not_scheduled'])
+      expect(done.items.map((item) => item.completionOrder)).toEqual([1, 2, null])
+      expect(done.items.map((item) => item.reason)).toEqual(['Slow down.', unscheduledReason, unscheduledReason])
+      for (const item of done.items) {
+        expect(item).toMatchObject({ errorCode: 'rate_limited', diagnostics: { retryAfterSeconds: 7 } })
       }
     } finally { await project.close() }
   })

@@ -48,6 +48,7 @@ const bridge: LitRootTransportBridge = {
     list: () => ipcRenderer.invoke(IPC.feedsList),
     searchJournals: (request) => ipcRenderer.invoke(IPC.feedsSearchJournals, request),
     add: (request) => ipcRenderer.invoke(IPC.feedsAdd, request),
+    cancelAdd: (requestId) => ipcRenderer.invoke(IPC.feedsCancelAdd, requestId),
     remove: (subscriptionId) => ipcRenderer.invoke(IPC.feedsRemove, subscriptionId),
     refresh: (subscriptionId) => ipcRenderer.invoke(IPC.feedsRefresh, subscriptionId),
     items: (request) => ipcRenderer.invoke(IPC.feedsItems, request),

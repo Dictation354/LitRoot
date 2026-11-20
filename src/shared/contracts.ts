@@ -392,9 +392,14 @@ export const dependencyReportSchema = z.object({
 })
 export type DependencyReport = z.infer<typeof dependencyReportSchema>
 
+const issnSchema = z.string().regex(/^\d{4}-\d{3}[\dX]$/)
+export const FEED_RETENTION_DAYS = 90
+export const FEED_DAY_RANGES = [1, 3, 7, 14, 30, FEED_RETENTION_DAYS] as const
+
 export const feedSubscriptionSchema = z.object({
   id: z.string(),
   issn: z.string(),
+  issns: z.array(issnSchema),
   title: z.string(),
   unreadCount: z.number().int().nonnegative(),
   lastCheckedAt: z.string().nullable(),
@@ -412,7 +417,7 @@ export const feedItemSchema = z.object({
   summary: z.string(),
   doi: z.string(),
   url: z.string(),
-  publishedAt: z.string().nullable(),
+  publishedAt: z.string().regex(/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/).nullable(),
   discoveredAt: z.string(),
   readAt: z.string().nullable()
 })
@@ -420,7 +425,7 @@ export type FeedItem = z.infer<typeof feedItemSchema>
 
 export const feedItemsRequestSchema = z.object({
   subscriptionId: z.string().regex(/^feed_[a-f0-9]{24}$/).nullable().default(null),
-  days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(14), z.literal(30)]).default(7),
+  days: z.literal(FEED_DAY_RANGES).default(7),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().nonnegative().default(0)
 })
@@ -432,13 +437,14 @@ export const feedItemsResultSchema = z.object({
 })
 export type FeedItemsResult = z.infer<typeof feedItemsResultSchema>
 
+export const feedAddRequestIdSchema = z.uuid()
+
 export const addFeedRequestSchema = z.object({
+  requestId: feedAddRequestIdSchema,
   issn: z.string().trim().regex(/^\d{4}-?\d{3}[\dXx]$/),
   title: z.string().trim().max(200).optional()
 })
 export type AddFeedRequest = z.input<typeof addFeedRequestSchema>
-
-const issnSchema = z.string().regex(/^\d{4}-\d{3}[\dX]$/)
 
 export const journalSearchRequestSchema = z.object({
   query: z.string().trim().min(1).max(500)
@@ -555,6 +561,7 @@ export interface LitRootBridge {
     list(): Promise<FeedSubscription[]>
     searchJournals(request: JournalSearchRequest): Promise<JournalSearchResult>
     add(request: AddFeedRequest): Promise<FeedSubscription>
+    cancelAdd(requestId: string): Promise<boolean>
     remove(subscriptionId: string): Promise<void>
     refresh(subscriptionId: string): Promise<FeedSubscription>
     items(request: FeedItemsRequest): Promise<FeedItemsResult>
@@ -613,6 +620,7 @@ export const IPC = {
   feedsList: 'litroot:feeds:list',
   feedsSearchJournals: 'litroot:feeds:search-journals',
   feedsAdd: 'litroot:feeds:add',
+  feedsCancelAdd: 'litroot:feeds:cancel-add',
   feedsRemove: 'litroot:feeds:remove',
   feedsRefresh: 'litroot:feeds:refresh',
   feedsItems: 'litroot:feeds:items',

@@ -6,6 +6,7 @@ import type {
   RefObject,
   SetStateAction
 } from 'react'
+import { FEED_RETENTION_DAYS } from '../../shared/contracts'
 import type {
   FeedSubscription,
   PaperDetail,
@@ -111,6 +112,7 @@ export function ProjectSidebar({
   onOpenProjectMenu(project: ProjectSummary, button: HTMLButtonElement): void
   onConnectProject(): void
 }) {
+  const unreadScope = `近 ${FEED_RETENTION_DAYS} 天未读`
   return (
     <aside className="project-sidebar">
       <div className="brand">
@@ -129,39 +131,42 @@ export function ProjectSidebar({
             onClick={() => onSelectFeed('recent')}
           >
             <Icon name="library" size={16} />
-            <span>最近文献</span>
-            <strong>{feeds.reduce((sum, feed) => sum + feed.unreadCount, 0)}</strong>
+            <span>最近文献<small className="feed-unread-scope">{unreadScope}</small></span>
+            <strong title={unreadScope}>{feeds.reduce((sum, feed) => sum + feed.unreadCount, 0)}</strong>
           </button>
-          {feeds.map((feed) => (
-            <div
-              className={`project-entry feed-source-entry ${feedScope === feed.id ? 'selected' : ''}`}
-              key={feed.id}
-            >
-              <button
-                type="button"
-                className="project-main"
-                title={feed.error || `ISSN ${feed.issn}`}
-                onClick={() => onSelectFeed(feed.id)}
+          {feeds.map((feed) => {
+            const coverage = `ISSN ${feed.issns.join(' · ')}`
+            return (
+              <div
+                className={`project-entry feed-source-entry ${feedScope === feed.id ? 'selected' : ''}`}
+                key={feed.id}
               >
-                <Icon name="book" size={16} />
-                <span>
-                  <strong>{feed.title}</strong>
-                  <small className={feed.error ? 'status-error' : ''}>
-                    {feed.error ? 'Crossref 刷新错误' : `ISSN ${feed.issn}`}
-                  </small>
-                </span>
-                <span className={`project-count ${feed.error ? 'error' : ''}`}>{feed.unreadCount}</span>
-              </button>
-              <button
-                type="button"
-                className="project-menu-trigger"
-                aria-label={`${feed.title}期刊操作`}
-                onClick={(event) => onOpenFeedMenu(feed, event.currentTarget)}
-              >
-                <Icon name="more" />
-              </button>
-            </div>
-          ))}
+                <button
+                  type="button"
+                  className="project-main"
+                  title={feed.error ? `${coverage}\n${feed.error}` : coverage}
+                  onClick={() => onSelectFeed(feed.id)}
+                >
+                  <Icon name="book" size={16} />
+                  <span>
+                    <strong>{feed.title}</strong>
+                    <small className={feed.error ? 'status-error' : ''}>
+                      {feed.error ? 'Crossref 刷新错误' : coverage}
+                    </small>
+                  </span>
+                  <span className={`project-count ${feed.error ? 'error' : ''}`} title={unreadScope} aria-label={`${unreadScope} ${feed.unreadCount}`}>{feed.unreadCount}</span>
+                </button>
+                <button
+                  type="button"
+                  className="project-menu-trigger"
+                  aria-label={`${feed.title}期刊操作`}
+                  onClick={(event) => onOpenFeedMenu(feed, event.currentTarget)}
+                >
+                  <Icon name="more" />
+                </button>
+              </div>
+            )
+          })}
         </div>
         <div className="sidebar-section-title"><span>项目</span><span>{projects.length}</span></div>
         <div className="project-list">

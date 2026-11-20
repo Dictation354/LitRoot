@@ -8,9 +8,9 @@ import {
 } from '../../src/service/fetch-record.js'
 
 describe('paper-fetch record parsing', () => {
-  it('reads schema-v1 receipts and prefers primary Markdown over the internal body snapshot', () => {
+  it.each([1, 2])('reads schema-v%i receipts and prefers primary Markdown over the internal body snapshot', (schemaVersion) => {
     const receipt = {
-      schema_version: 1, contract: 'paper-fetch/receipt', index: 2, status: 'completed',
+      schema_version: schemaVersion, contract: 'paper-fetch/receipt', index: 2, status: 'completed',
       identity: { doi: '10.4242/receipt', title: 'Receipt paper', canonical_landing_url: 'https://example.test/receipt' },
       acceptance: { overall: 'degraded', identity: 'resolved', content: 'fulltext',
         asset_summary: { local: 1, not_archived: 1 } },
@@ -25,7 +25,7 @@ describe('paper-fetch record parsing', () => {
       acceptance: 'degraded', contentKind: 'fulltext',
       diagnostics: { assetSummary: { local: 1, not_archived: 1 }, warningCodes: ['asset_not_archived'] }
     })
-    expect(parseTerminalRecord({ ...receipt, output_paths: [] })?.outputPath).toBe(receipt.body_path)
+    expect(parseTerminalRecord({ ...receipt, output_paths: ['/tmp/paper.json'] })?.outputPath).toBe(receipt.body_path)
     expect(parseTerminalRecord({ ...receipt, contract: 'unrelated' })?.outputPath).toBeNull()
   })
 
@@ -109,15 +109,38 @@ it('uses error and acquisition provider fields without treating source as a prov
   expect(parseTerminalRecord({ completion_order: 8 })?.completionOrder).toBeNull()
 })
 
-it('fails unknown or incomplete aborted records instead of counting cancellation', () => {
-  for (const value of [
-    { record_status: 'aborted' },
-    { status: 'aborted', acceptance: { overall: 'action_required' } },
-    { record_status: 'aborted', error: { status: 'aborted' } },
-    { record_status: 'aborted', error: { status: 'aborted', code: 'rate_limited' }, acceptance: { overall: 'action_required' } }
+it.each([[2, '7.0.1'], [3, '8.0.0']])('classifies schema-v%i batch aborts by their structured evidence', (schemaVersion, toolVersion) => {
+  const timestamp = '2026-09-02T02:00:00Z'
+  const error = { status: 'aborted', code: 'rate_limited', reason: 'Provider lane stopped', retry_after_seconds: 7 }
+  const aborted = {
+    schema_version: schemaVersion, tool_version: toolVersion, record_status: 'aborted',
+    started_at: timestamp, completed_at: timestamp, acceptance: { overall: 'action_required' }, error
+  }
+
+  expect(parseTerminalRecord(aborted, 1, true)).toMatchObject({
+    status: 'not_scheduled', reason: error.reason, errorCode: error.code, diagnostics: { retryAfterSeconds: 7 }
+  })
+  expect(parseTerminalRecord({ ...aborted, error: { ...error, code: 'request_cancelled' } }, 1, true)?.status).toBe('cancelled')
+  expect(parseTerminalRecord(aborted)?.status).toBe('failed')
+  for (const overrides of [
+    { completed_at: '2026-09-02T02:00:01Z' },
+    { started_at: null, completed_at: null },
+    { error: null },
+    { error: { status: 'aborted', code: 'rate_limited' } },
+    { error: { ...error, code: 'unknown' } },
+    { error: { ...error, status: 'rate_limited' } }
   ]) {
-    const record = parseTerminalRecord(value, 1, true)!
+    const record = parseTerminalRecord({ ...aborted, ...overrides }, 1, true)!
     expect(record.status).toBe('failed')
     expect(actionRequired(record)).toBe(false)
   }
+})
+
+it('prefers nested content semantic losses and retains legacy top-level counts', () => {
+  const legacy = { table_fallback_count: 2, formula_fallback_count: 4 }
+  const losses = { table_semantic_loss_count: 1, formula_missing_count: 3 }
+  expect(parseTerminalRecord({ schema_version: 2, semantic_losses: legacy })?.diagnostics?.semanticLosses).toEqual(legacy)
+  expect(parseTerminalRecord({
+    schema_version: 3, acceptance: { content: { semantic_losses: losses } }, semantic_losses: legacy
+  })?.diagnostics?.semanticLosses).toEqual(losses)
 })
