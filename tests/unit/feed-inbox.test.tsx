@@ -201,7 +201,7 @@ describe('Feed inbox', () => {
       else if (filter === 'page') container.querySelectorAll<HTMLButtonElement>('.library-footer button')[1]!.click()
       else {
         const select = container.querySelector<HTMLSelectElement>(`select[aria-label="${filter === 'range' ? '登记时间范围' : '每页条数'}"]`)!
-        select.value = filter === 'range' ? '90' : '20'
+        select.value = filter === 'range' ? '30' : '20'
         select.dispatchEvent(new Event('change', { bubbles: true }))
       }
     })
@@ -340,6 +340,7 @@ describe('Feed inbox', () => {
     expect(container.querySelectorAll('.feed-row')).toHaveLength(2)
     const range = container.querySelector<HTMLSelectElement>('select[aria-label="登记时间范围"]')!
     expect(range.value).toBe('7')
+    expect(Array.from(range.options, (option) => option.value)).toEqual(['1', '3', '7', '14', '30'])
     await act(async () => {
       range.value = '14'
       range.dispatchEvent(new Event('change', { bubbles: true }))

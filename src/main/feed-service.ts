@@ -58,7 +58,7 @@ const crossrefWorkSchema = z.object({
     given: z.string().max(1_000).optional(),
     family: z.string().max(1_000).optional(),
     name: z.string().max(2_000).optional()
-  }).passthrough()).max(1_000).optional(),
+  }).passthrough()).optional(),
   abstract: z.string().max(1_000_000).optional(),
   URL: z.string().max(8_000).optional(),
   created: z.object({ 'date-time': z.string().max(100) }).passthrough(),
@@ -445,8 +445,8 @@ export class FeedService {
       if (!journal) throw new Error('Crossref 中没有找到该期刊。')
       this.assertNewJournal(journal.issns)
       const upperBound = now()
-      const backfillFrom = cutoff(30, Date.parse(upperBound))
-      const works = await this.fetchWorks(journal.issns, 'created', backfillFrom, upperBound, abort.signal)
+      const backfillFrom = cutoff(FEED_RETENTION_DAYS, Date.parse(upperBound))
+      const works = await this.fetchWorks(journal.issns, { createdFrom: backfillFrom, until: upperBound }, abort.signal)
       abort.signal.throwIfAborted()
       const id = `feed_${hash(journal.issn).slice(0, 24)}`
       this.transaction(() => {
@@ -494,8 +494,13 @@ export class FeedService {
     try {
       const checkpoint = stringValue(row.index_checkpoint_at)
       const upperBound = now()
-      const works = await this.fetchWorks(this.subscriptionIssns(row), checkpoint ? 'index' : 'created',
-        checkpoint || stringValue(row.backfill_from_at) || cutoff(), upperBound, abort.signal)
+      const oldest = cutoff(FEED_RETENTION_DAYS, Date.parse(upperBound))
+      const savedFrom = checkpoint || stringValue(row.backfill_from_at)
+      const from = savedFrom > oldest ? savedFrom : oldest
+      const window = checkpoint
+        ? { createdFrom: oldest, indexFrom: from, until: upperBound }
+        : { createdFrom: from, until: upperBound }
+      const works = await this.fetchWorks(this.subscriptionIssns(row), window, abort.signal)
       abort.signal.throwIfAborted()
       this.transaction(() => this.saveRefresh(subscriptionId, works, upperBound))
       this.emitChanged()
@@ -590,13 +595,15 @@ export class FeedService {
   }
 
   private async fetchWorks(
-    issns: string[], dateType: 'created' | 'index', fromDate: string, untilDate: string, signal: AbortSignal
+    issns: string[], { createdFrom, indexFrom, until }: { createdFrom: string; indexFrom?: string; until: string },
+    signal: AbortSignal
   ): Promise<Map<string, ParsedWork>> {
     // Crossref interprets these timestamps as UTC and accepts seconds without a time zone suffix.
     const filter = [
       ...issns.map((issn) => `issn:${issn}`),
-      `from-${dateType}-date:${fromDate.slice(0, 19)}`,
-      `until-${dateType}-date:${untilDate.slice(0, 19)}`,
+      `from-created-date:${createdFrom.slice(0, 19)}`,
+      `until-created-date:${until.slice(0, 19)}`,
+      ...(indexFrom ? [`from-index-date:${indexFrom.slice(0, 19)}`, `until-index-date:${until.slice(0, 19)}`] : []),
       'type:journal-article'
     ].join(',')
     const works = new Map<string, ParsedWork>()
@@ -615,7 +622,7 @@ export class FeedService {
       }
       for (const item of page.message.items) {
         const work = parseWork(item)
-        works.set(work.doi, work)
+        if (work.discoveredAt >= createdFrom && work.discoveredAt <= until) works.set(work.doi, work)
       }
       if (page.message.items.length < WORK_PAGE_SIZE || !page.message['next-cursor']) break
       cursor = page.message['next-cursor']
@@ -643,6 +650,7 @@ export class FeedService {
 
   private async refreshDue(): Promise<void> {
     if (this.closed) return
+    if (this.cleanup()) this.emitChanged()
     const dueBefore = new Date(Date.now() - REFRESH_AFTER_MS).toISOString()
     const ids = (this.database.prepare(`
       SELECT id FROM subscriptions WHERE index_checkpoint_at IS NULL OR error IS NOT NULL OR last_successful_at <= ?
@@ -694,8 +702,8 @@ export class FeedService {
     )
   }
 
-  private cleanup(): void {
-    this.database.prepare('DELETE FROM items WHERE discovered_at < ?').run(cutoff())
+  private cleanup(): boolean {
+    return this.database.prepare('DELETE FROM items WHERE discovered_at < ?').run(cutoff()).changes > 0
   }
 
   private getSubscription(id: string): FeedSubscription {

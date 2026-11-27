@@ -393,8 +393,8 @@ export const dependencyReportSchema = z.object({
 export type DependencyReport = z.infer<typeof dependencyReportSchema>
 
 const issnSchema = z.string().regex(/^\d{4}-\d{3}[\dX]$/)
-export const FEED_RETENTION_DAYS = 90
-export const FEED_DAY_RANGES = [1, 3, 7, 14, 30, FEED_RETENTION_DAYS] as const
+export const FEED_RETENTION_DAYS = 30
+export const FEED_DAY_RANGES = [1, 3, 7, 14, FEED_RETENTION_DAYS] as const
 
 export const feedSubscriptionSchema = z.object({
   id: z.string(),

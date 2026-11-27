@@ -2,6 +2,16 @@
 
 [English](CHANGELOG.md)
 
+## [1.3.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.3) — 2026-11-27
+
+### 修复
+
+- 修复 Nature 等期刊遇到超过 1,000 位作者的论文时整页刷新失败的问题。作者仍按署名顺序取前 50 个非空姓名后去重。
+- 期刊雷达按 DOI 首次登记到 Crossref 的时间，将抓取、未读计数和缓存保留统一为最近 30 天。已有订阅自动使用新范围，无需重新订阅。
+- 浏览范围可选 1、3、7、14 或 30 天，默认 7 天。启动时及运行期间每小时都会清理过期雷达条目，即使刷新失败也会执行。清理保留窗口内的已读状态和已加入项目的文献。
+
+[完整变更](https://github.com/Dictation354/LitRoot/compare/v1.3.2...v1.3.3)
+
 ## [1.3.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.2) — 2026-11-20
 
 ### 改进

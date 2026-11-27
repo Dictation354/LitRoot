@@ -72,7 +72,8 @@ describe('Crossref parsing and contracts', () => {
     expect(feedItemsRequestSchema.parse({})).toMatchObject({ days: 7, limit: 50, offset: 0 })
     expect(feedItemsRequestSchema.parse({ limit: 200 }).limit).toBe(200)
     expect(() => feedItemsRequestSchema.parse({ limit: 201 })).toThrow()
-    for (const days of [1, 3, 7, 14, 30, 90]) expect(feedItemsRequestSchema.parse({ days }).days).toBe(days)
+    for (const days of [1, 3, 7, 14, 30]) expect(feedItemsRequestSchema.parse({ days }).days).toBe(days)
+    expect(() => feedItemsRequestSchema.parse({ days: 90 })).toThrow()
     expect(() => feedItemsRequestSchema.parse({ days: 2 })).toThrow()
     expect(() => feedItemsRequestSchema.parse({ subscriptionId: 'feed_bad' })).toThrow()
     expect(() => markFeedReadRequestSchema.parse({ itemIds: ['feeditem_bad'], read: true })).toThrow()
@@ -221,6 +222,7 @@ describe('Crossref refresh and database', () => {
     expect(worksCalls).toHaveLength(2)
     const firstUrl = new URL(String(worksCalls[0]?.[0]))
     const filter = firstUrl.searchParams.get('filter') ?? ''
+    expect(new URL(String(worksCalls[1]?.[0])).searchParams.get('filter')).toBe(filter)
     const until = /until-created-date:([^,]+)/.exec(filter)?.[1] ?? ''
     expect(until).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
     expect(until >= startedAt).toBe(true)
@@ -286,7 +288,51 @@ describe('Crossref refresh and database', () => {
     service.close()
   })
 
-  it('applies each date range and shares the 90-day boundary with the unread counts', async () => {
+  it.each(['created', 'index'] as const)('recovers an old Nature subscription using a bounded %s window', async (mode) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-20T12:00:00Z'))
+    const { service, databasePath } = await serviceAndPath()
+    const database = new DatabaseSync(databasePath)
+    const id = 'feed_aaaaaaaaaaaaaaaaaaaaaaaa'
+    const oldStart = '2026-08-20T12:00:00.000Z'
+    const checkpoint = mode === 'index' ? oldStart : null
+    database.prepare(`INSERT INTO subscriptions (id, issn, issns_json, title, backfill_from_at, index_checkpoint_at)
+      VALUES (?, '0028-0836', '["0028-0836"]', 'Nature', ?, ?)`).run(id, oldStart, checkpoint)
+
+    const author = Array.from({ length: 1_884 }, (_, index) => ({
+      name: index === 0 ? '  ' : `Author ${index === 2 ? 1 : index}`
+    }))
+    const fetchMock = vi.fn(async (url: URL) => {
+      const authors = [...author]
+      if (fetchMock.mock.calls.length === 1) authors[1_883] = { name: 'x'.repeat(2_001) }
+      return worksResponse([work(1, { author: authors }), work(2)])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(service.refresh(id)).rejects.toThrow('无法识别')
+    expect(service.list()[0]?.error).toContain('无法识别')
+    expect(service.items({}).total).toBe(0)
+    expect(database.prepare('SELECT index_checkpoint_at FROM subscriptions WHERE id = ?').get(id))
+      .toMatchObject({ index_checkpoint_at: checkpoint })
+
+    await vi.advanceTimersByTimeAsync(DAY_MS)
+    expect(await service.refresh(id)).toMatchObject({ title: 'Nature', error: null, unreadCount: 2 })
+    for (const [index, [url]] of fetchMock.mock.calls.entries()) {
+      const from = `2026-10-${21 + index}T12:00:00`
+      const until = `2026-11-${20 + index}T12:00:00`
+      expect(url.searchParams.get('filter')?.split(',')).toEqual([
+        'issn:0028-0836', `from-created-date:${from}`, `until-created-date:${until}`,
+        ...(mode === 'index' ? [`from-index-date:${from}`, `until-index-date:${until}`] : []), 'type:journal-article'
+      ])
+    }
+    const stored = service.items({}).items
+    const expectedAuthors = Array.from({ length: 50 }, (_, index) => `Author ${index + 1}`)
+      .filter((name) => name !== 'Author 2')
+    expect(stored.map(({ authors }) => authors)).toEqual([expectedAuthors, ['Ada Lovelace']])
+    database.close()
+    await service.close()
+  })
+
+  it('uses the same inclusive 30-day boundary for browsing, unread counts, and offline cache cleanup', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-01T12:00:00.000Z'))
     const { service, databasePath } = await serviceAndPath()
@@ -296,35 +342,44 @@ describe('Crossref refresh and database', () => {
         id, issn, issns_json, title, publisher
       ) VALUES (?, ?, ?, ?, '')`).run(`feed_${id.repeat(24)}`, issn, JSON.stringify([issn]), `Journal ${id}`)
     }
-    const ages = [1, 3, 7, 14, 30, 31, 90, 91]
-    ages.forEach((age, index) => {
+    const agesMs = [1, 3, 7, 14, 30].map((days) => days * DAY_MS)
+    agesMs.push(30 * DAY_MS + 1)
+    agesMs.forEach((age, index) => {
       database.prepare(`INSERT INTO items (
         id, subscription_id, doi, title, authors_json, summary, url, published_at, discovered_at, read_at
       ) VALUES (?, ?, ?, ?, '[]', '', '', NULL, ?, ?)`).run(
         `feeditem_${String(index).padStart(24, '0')}`,
         index === 0 ? `feed_${'b'.repeat(24)}` : `feed_${'a'.repeat(24)}`,
         `10.1234/boundary.${index}`,
-        `Boundary ${age}`,
-        new Date(Date.now() - age * 86_400_000).toISOString(),
-        index < 6 && index % 2 === 0 ? new Date().toISOString() : null
+        `Boundary ${index}`,
+        new Date(Date.now() - age).toISOString(),
+        index === 0 || index === 2 ? new Date().toISOString() : null
       )
     })
-    database.close()
-
-    const counts = [1, 3, 7, 14, 30].map((days) => service.items({
-      subscriptionId: null, days: days as 1 | 3 | 7 | 14 | 30, limit: 50, offset: 0
-    }).total)
+    const counts = ([1, 3, 7, 14, 30] as const).map((days) => service.items({ days }).total)
     expect(counts).toEqual([1, 2, 3, 4, 5])
-    const retained = service.items({ days: 90 })
-    expect(retained.total).toBe(7)
+    const retained = service.items({ days: 30 })
     expect(retained.items.filter((item) => !item.readAt).map((item) => item.title))
-      .toEqual(['Boundary 3', 'Boundary 14', 'Boundary 31', 'Boundary 90'])
-    expect(service.list().map(({ unreadCount }) => unreadCount)).toEqual([4, 0])
+      .toEqual(['Boundary 1', 'Boundary 3', 'Boundary 4'])
+    expect(service.list().map(({ unreadCount }) => unreadCount)).toEqual([3, 0])
     const overview = service.items({ subscriptionId: null, days: 7, limit: 50, offset: 0 })
     expect(overview.items.some((item) => item.readAt)).toBe(true)
     expect(overview.items.some((item) => !item.readAt)).toBe(true)
     expect(service.items({ subscriptionId: `feed_${'b'.repeat(24)}`, days: 7, limit: 50, offset: 0 }).total).toBe(1)
-    service.close()
+    await service.close()
+    const restarted = new FeedService(databasePath, vi.fn())
+    const cached = database.prepare('SELECT title FROM items ORDER BY title')
+    expect(cached.all().map((row) => row.title)).toEqual(retained.items.map((item) => item.title))
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    restarted.start()
+    await vi.advanceTimersByTimeAsync(3_600_350)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(restarted.list().map(({ unreadCount }) => unreadCount)).toEqual([2, 0])
+    expect(cached.all().map((row) => row.title)).toEqual(['Boundary 0', 'Boundary 1', 'Boundary 2', 'Boundary 3'])
+    expect(restarted.items({ days: 30 }).items.filter((item) => item.readAt)).toHaveLength(2)
+    database.close()
+    await restarted.close()
   })
 
   it('paginates up to 200 items with stable offsets and totals', async () => {
@@ -399,10 +454,9 @@ describe('Crossref refresh and database', () => {
     service.close()
   })
 
-  it('upgrades v3 in place and restarts an interrupted 90-day backfill on the next hourly check', async () => {
+  it('upgrades v3 in place and retries an interrupted backfill with a fresh 30-day window', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-11-20T12:34:56.123Z'))
-    const from = new Date(Date.now() - 90 * DAY_MS).toISOString().slice(0, 19)
     const directory = await mkdtemp(join(tmpdir(), 'litroot-feeds-'))
     temporaryDirectories.push(directory)
     const databasePath = join(directory, 'feeds.sqlite3')
@@ -432,10 +486,11 @@ describe('Crossref refresh and database', () => {
     legacy.close()
 
     const service = new FeedService(databasePath, vi.fn())
-    const query = { days: 90 as const, subscriptionId }
+    const query = { days: 30 as const, subscriptionId }
     expect(service.items(query).items.map(({ publishedAt }) => publishedAt)).toEqual(['2026', '2026-08'])
     const fetchMock = vi.fn(async (input: URL) => {
       expect(input.pathname).toBe('/works')
+      const from = fetchMock.mock.calls.length <= 2 ? '2026-10-21T12:34:56' : '2026-10-21T13:34:56'
       expect(input.searchParams.get('filter')).toContain(`issn:0034-4257,issn:2041-1723,from-created-date:${from},`)
       if (input.searchParams.get('cursor') !== '*') return new Response('{}', { status: 503 })
       if (fetchMock.mock.calls.length === 1) {
@@ -443,7 +498,7 @@ describe('Crossref refresh and database', () => {
       }
       return worksResponse([
         work(1, { published: { 'date-parts': [[2026, 1, 1]] } }),
-        work(3, { created: { 'date-time': new Date(Date.now() - 89 * DAY_MS).toISOString() } })
+        work(3, { created: { 'date-time': new Date(Date.now() - 29 * DAY_MS).toISOString() } })
       ])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -544,9 +599,10 @@ describe('Crossref refresh and database', () => {
 
     await vi.advanceTimersByTimeAsync(3_600_000 - resumesAt)
     expect(launches).toHaveLength(5)
-    expect(launches[4]).toMatchObject({ at: 3_600_000, filter: expect.stringContaining(
-      'issn:0034-4257,from-index-date:2026-11-19T11:00:00,until-index-date:2026-11-20T13:00:00'
-    ) })
+    expect(launches[4]?.at).toBe(3_600_000)
+    expect(launches[4]?.filter.split(',')).toEqual(expect.arrayContaining([
+      'issn:0034-4257', 'from-index-date:2026-11-19T11:00:00', 'until-index-date:2026-11-20T13:00:00'
+    ]))
     await vi.advanceTimersByTimeAsync(2_000)
     expect(service.list().every(({ error }) => error === null)).toBe(true)
     database.close()

@@ -2,6 +2,16 @@
 
 [中文](CHANGELOG_CN.md)
 
+## [1.3.3](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.3) — 2026-11-27
+
+### Fixed
+
+- Fixed a Journal Radar refresh failure in Nature and other journals when a page contains a paper with more than 1,000 authors. LitRoot keeps the first 50 nonempty names in byline order and removes duplicates from that selection.
+- Fetches, unread counts, and cache retention now use the same 30-day window based on when a DOI was first registered with Crossref. Existing subscriptions pick up the new window automatically.
+- Browse the past 1, 3, 7, 14, or 30 days, with 7 days selected by default. Startup and hourly cleanup remove expired radar entries even when a refresh fails. Read status within the window and papers already added to projects are preserved.
+
+[Full changes](https://github.com/Dictation354/LitRoot/compare/v1.3.2...v1.3.3)
+
 ## [1.3.2](https://github.com/Dictation354/LitRoot/releases/tag/v1.3.2) — 2026-11-20
 
 ### Improved
